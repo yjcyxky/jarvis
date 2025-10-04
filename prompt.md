@@ -92,8 +92,6 @@ interface ClaudeCommandOptions {
   "--print": boolean;
   "--output-format": "stream-json" | "text";
   "--model"?: string;
-  "--max-tokens"?: number;
-  "--temperature"?: number;
 }
 ```
 

@@ -13,7 +13,7 @@ export class ClaudeCodeExecutor {
     this.outputChannel = vscode.window.createOutputChannel('Jarvis - Claude');
   }
 
-  private buildCommand(prompt: string, options?: Partial<ClaudeCommandOptions>): string[] {
+  private buildCommand(options?: Partial<ClaudeCommandOptions>): string[] {
     const config = vscode.workspace.getConfiguration('jarvis.claude');
     const executable = config.get<string>('executable', 'claude');
     const defaultParams = config.get<any>('defaultParams', {});
@@ -51,20 +51,9 @@ export class ClaudeCodeExecutor {
       command.push('--model', options?.['--model'] || defaultParams.model);
     }
 
-    if (options?.['--max-tokens'] || defaultParams['max-tokens']) {
-      command.push('--max-tokens', String(options?.['--max-tokens'] || defaultParams['max-tokens']));
-    }
-
-    if (options?.['--temperature'] !== undefined || defaultParams.temperature !== undefined) {
-      command.push('--temperature', String(options?.['--temperature'] ?? defaultParams.temperature));
-    }
-
     if (options?.['--mcp-config'] || defaultParams['mcp-config']) {
       command.push('--mcp-config', options?.['--mcp-config'] || defaultParams['mcp-config']);
     }
-
-    // Add the prompt at the end
-    command.push(prompt);
 
     return command;
   }
@@ -84,7 +73,7 @@ export class ClaudeCodeExecutor {
     logFile?: string
   ): Promise<void> {
     return new Promise((resolve, reject) => {
-      const command = this.buildCommand(prompt, options);
+      const command = this.buildCommand(options);
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const actualLogFile = logFile || path.join(
         vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '',
@@ -98,12 +87,66 @@ export class ClaudeCodeExecutor {
       this.outputChannel.appendLine(`Command: ${command.join(' ')}`);
       this.outputChannel.appendLine(`Log file: ${actualLogFile}`);
 
+      const stderrChunks: string[] = [];
+      const recentMessages: string[] = [];
+      let lastErrorMessage: string | undefined;
+
+      const recordRecentMessage = (message: string | undefined) => {
+        if (!message) {
+          return;
+        }
+        const trimmed = message.trim();
+        if (!trimmed) {
+          return;
+        }
+        recentMessages.push(trimmed);
+        if (recentMessages.length > 10) {
+          recentMessages.shift();
+        }
+      };
+
       const childProc = child_process.spawn(command[0], command.slice(1), {
         cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
         env: { ...process.env }
       });
 
       this.processes.set(id, childProc);
+
+      if (!childProc.stdin) {
+        const error = new Error('Claude process stdin is not available.');
+        this.outputChannel.appendLine(`ERROR: ${error.message}`);
+        logStream.write(
+          JSON.stringify({
+            type: 'error',
+            error: error.message,
+            timestamp: new Date().toISOString()
+          }) + '\n'
+        );
+        childProc.kill('SIGTERM');
+        this.processes.delete(id);
+        logStream.end();
+        reject(error);
+        return;
+      }
+
+      childProc.stdin.setDefaultEncoding('utf8');
+      childProc.stdin.write(prompt, 'utf8', (writeError: Error | null | undefined) => {
+        if (writeError) {
+          const message = `Failed to write prompt to Claude stdin: ${writeError.message}`;
+          this.outputChannel.appendLine(`ERROR: ${message}`);
+          const errorJson: ClaudeJsonMessage = {
+            type: 'error',
+            error: message,
+            timestamp: new Date().toISOString()
+          };
+          logStream.write(JSON.stringify(errorJson) + '\n');
+          recordRecentMessage(message);
+          childProc.kill('SIGTERM');
+          this.processes.delete(id);
+          reject(new Error(message));
+        }
+      });
+      childProc.stdin.end();
 
       // Handle stdout with readline for JSON parsing
       const rl = readline.createInterface({
@@ -123,6 +166,24 @@ export class ClaudeCodeExecutor {
           // Display in output channel
           this.formatAndDisplayMessage(message);
 
+          // Record message details for improved error reporting
+          if (message.type === 'error') {
+            recordRecentMessage(message.error);
+            lastErrorMessage = message.error || lastErrorMessage;
+          } else if (message.type === 'assistant' && message.message?.content) {
+            message.message.content.forEach(item => {
+              if (item.type === 'text' && item.text) {
+                recordRecentMessage(item.text);
+              }
+            });
+          } else if (message.type === 'system' && message.content) {
+            message.content.forEach(item => {
+              if (typeof item === 'object' && 'text' in item && typeof item.text === 'string') {
+                recordRecentMessage(item.text);
+              }
+            });
+          }
+
           // Handle specific message types
           this.handleMessage(id, message);
         } catch (error) {
@@ -134,6 +195,7 @@ export class ClaudeCodeExecutor {
           };
           logStream.write(JSON.stringify(textMessage) + '\n');
           this.outputChannel.appendLine(line);
+          recordRecentMessage(line);
         }
       });
 
@@ -146,6 +208,9 @@ export class ClaudeCodeExecutor {
         };
         logStream.write(JSON.stringify(errorMessage) + '\n');
         this.outputChannel.appendLine(`ERROR: ${data}`);
+        const stderrText = data.toString();
+        stderrChunks.push(stderrText);
+        stderrText.split(/\r?\n/).forEach(chunk => recordRecentMessage(chunk));
       });
 
       // Handle process exit
@@ -157,9 +222,28 @@ export class ClaudeCodeExecutor {
           this.outputChannel.appendLine(`Claude Code execution completed successfully for: ${id}`);
           resolve();
         } else {
-          const error = `Claude Code execution failed with code ${code} for: ${id}`;
-          this.outputChannel.appendLine(error);
-          reject(new Error(error));
+          const details: string[] = [];
+          details.push(`Claude Code execution failed with code ${code ?? 'unknown'} for: ${id}`);
+
+          if (lastErrorMessage?.trim()) {
+            details.push(`Claude reported: ${lastErrorMessage.trim()}`);
+          }
+
+          const stderrText = stderrChunks.join('').trim();
+          if (stderrText) {
+            details.push(`stderr: ${stderrText}`);
+          }
+
+          if (!lastErrorMessage && !stderrText && recentMessages.length > 0) {
+            const recentSample = recentMessages.slice(-3).join(' | ');
+            details.push(`Recent output: ${recentSample}`);
+          }
+
+          details.push(`Log file: ${actualLogFile}`);
+
+          const errorMessage = details.join('\n');
+          this.outputChannel.appendLine(errorMessage);
+          reject(new Error(errorMessage));
         }
       });
 

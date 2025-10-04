@@ -6,14 +6,35 @@ export class AgentTreeItem extends vscode.TreeItem {
   constructor(
     public readonly agent: AgentConfig,
     public readonly status: AgentStatus,
-    public readonly collapsibleState: vscode.TreeItemCollapsibleState
+    public readonly collapsibleState: vscode.TreeItemCollapsibleState,
+    public readonly historyCount: number
   ) {
     super(agent.name, collapsibleState);
 
-    this.tooltip = `${agent.name}: ${agent.description}`;
-    this.description = this.getStatusDescription();
+    const tooltipLines = [
+      `${agent.name}: ${agent.description}`,
+      `Status: ${status.state}`
+    ];
+    if (status.startTime) {
+      tooltipLines.push(`Started: ${status.startTime.toLocaleString()}`);
+    }
+    if (status.lastCompleted) {
+      tooltipLines.push(`Last finished: ${status.lastCompleted.toLocaleString()}`);
+    }
+    if (status.logFile) {
+      tooltipLines.push(`Log: ${status.logFile}`);
+    }
+    tooltipLines.push(`Runs: ${historyCount}`);
+    this.tooltip = tooltipLines.join('\n');
+    const statusDescription = this.getStatusDescription();
+    this.description = historyCount > 0 ? `${statusDescription} · ${historyCount} logs` : statusDescription;
     this.contextValue = `agent.${status.state}`;
     this.iconPath = this.getIcon();
+    this.command = {
+      command: 'jarvis.openAgentLog',
+      title: 'Open Agent Log',
+      arguments: [agent.name]
+    };
   }
 
   private getStatusDescription(): string {
@@ -45,16 +66,41 @@ export class AgentTreeItem extends vscode.TreeItem {
   }
 }
 
-export class AgentTreeProvider implements vscode.TreeDataProvider<AgentTreeItem> {
-  private _onDidChangeTreeData: vscode.EventEmitter<AgentTreeItem | undefined | null | void> =
-    new vscode.EventEmitter<AgentTreeItem | undefined | null | void>();
-  readonly onDidChangeTreeData: vscode.Event<AgentTreeItem | undefined | null | void> =
+export class ViewHistoryTreeItem extends vscode.TreeItem {
+  constructor(
+    public readonly targetType: 'agent' | 'todo',
+    public readonly targetId: string,
+    public readonly historyCount: number
+  ) {
+    super(`View History (${historyCount} runs)`, vscode.TreeItemCollapsibleState.None);
+
+    this.description = 'Click to view execution history';
+    this.contextValue = 'viewHistory';
+    this.iconPath = new vscode.ThemeIcon('history');
+    this.command = {
+      command: 'jarvis.viewAgentHistory',
+      title: 'View Agent History',
+      arguments: [targetId]
+    };
+  }
+}
+
+export class AgentTreeProvider implements vscode.TreeDataProvider<AgentTreeItem | ViewHistoryTreeItem> {
+  private _onDidChangeTreeData: vscode.EventEmitter<AgentTreeItem | ViewHistoryTreeItem | undefined | null | void> =
+    new vscode.EventEmitter<AgentTreeItem | ViewHistoryTreeItem | undefined | null | void>();
+  readonly onDidChangeTreeData: vscode.Event<AgentTreeItem | ViewHistoryTreeItem | undefined | null | void> =
     this._onDidChangeTreeData.event;
 
   private refreshTimer?: NodeJS.Timeout;
+  private readonly disposables: vscode.Disposable[] = [];
+  private lastRenderedVersion = -1;
 
   constructor(private agentManager: AgentManager) {
     this.startAutoRefresh();
+    this.disposables.push(
+      this.agentManager.onDidChange(() => this.refresh())
+    );
+    this.refresh(true);
   }
 
   private startAutoRefresh(): void {
@@ -67,15 +113,25 @@ export class AgentTreeProvider implements vscode.TreeDataProvider<AgentTreeItem>
     }
   }
 
-  refresh(): void {
-    this._onDidChangeTreeData.fire();
+  refresh(force = false): void {
+    if (force) {
+      this.lastRenderedVersion = this.agentManager.getChangeVersion();
+      this._onDidChangeTreeData.fire();
+      return;
+    }
+
+    const version = this.agentManager.getChangeVersion();
+    if (version !== this.lastRenderedVersion) {
+      this.lastRenderedVersion = version;
+      this._onDidChangeTreeData.fire();
+    }
   }
 
-  getTreeItem(element: AgentTreeItem): vscode.TreeItem {
+  getTreeItem(element: AgentTreeItem | ViewHistoryTreeItem): vscode.TreeItem {
     return element;
   }
 
-  getChildren(element?: AgentTreeItem): Thenable<AgentTreeItem[]> {
+  getChildren(element?: AgentTreeItem | ViewHistoryTreeItem): Thenable<(AgentTreeItem | ViewHistoryTreeItem)[]> {
     if (!element) {
       // Root level - return all agents
       const agents = this.agentManager.getAgents();
@@ -84,10 +140,25 @@ export class AgentTreeProvider implements vscode.TreeDataProvider<AgentTreeItem>
           name: agent.name,
           state: 'idle' as const
         };
-        return new AgentTreeItem(agent, status, vscode.TreeItemCollapsibleState.None);
+        const historyEntries = this.agentManager.getHistory(agent.name);
+        const collapsible = historyEntries.length > 0
+          ? vscode.TreeItemCollapsibleState.Collapsed
+          : vscode.TreeItemCollapsibleState.None;
+        return new AgentTreeItem(agent, status, collapsible, historyEntries.length);
       });
       return Promise.resolve(items);
     }
+
+    if (element instanceof AgentTreeItem) {
+      // Show the "View History" button as a child
+      const historyEntries = this.agentManager.getHistory(element.agent.name);
+      if (historyEntries.length > 0) {
+        return Promise.resolve([
+          new ViewHistoryTreeItem('agent', element.agent.name, historyEntries.length)
+        ]);
+      }
+    }
+
     return Promise.resolve([]);
   }
 
@@ -95,5 +166,6 @@ export class AgentTreeProvider implements vscode.TreeDataProvider<AgentTreeItem>
     if (this.refreshTimer) {
       clearInterval(this.refreshTimer);
     }
+    this.disposables.forEach(d => d.dispose());
   }
 }

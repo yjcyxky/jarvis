@@ -1,7 +1,10 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import { TodoItem, TodoExecution } from '../types';
+import { LogViewer } from '../utils/logViewer';
+import { HistoryStore, ExecutionHistoryEntry } from '../utils/historyStore';
 import { ClaudeCodeExecutor } from './claudeCodeExecutor';
 
 export class TodoManager {
@@ -9,8 +12,16 @@ export class TodoManager {
   private executor: ClaudeCodeExecutor;
   private watcher?: vscode.FileSystemWatcher;
   private executions: Map<string, TodoExecution> = new Map();
+  private changeVersion = 0;
+  private readonly _onDidChange = new vscode.EventEmitter<void>();
 
-  constructor(private workspaceRoot: string) {
+  readonly onDidChange: vscode.Event<void> = this._onDidChange.event;
+
+  constructor(
+    private workspaceRoot: string,
+    private readonly logViewer: LogViewer,
+    private readonly historyStore: HistoryStore
+  ) {
     this.executor = new ClaudeCodeExecutor();
     this.loadTodos();
     this.setupWatcher();
@@ -44,6 +55,7 @@ export class TodoManager {
 
     if (!fs.existsSync(todoDir)) {
       fs.mkdirSync(todoDir, { recursive: true });
+      this.markChanged();
       return;
     }
 
@@ -62,6 +74,8 @@ export class TodoManager {
         }
       }
     }
+
+    this.markChanged();
   }
 
   private parseTodoFile(content: string, filePath: string): TodoItem[] {
@@ -181,17 +195,45 @@ export class TodoManager {
     const executionId = `exec-${id}-${Date.now()}`;
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const logFile = path.join(this.getTodoLogDir(), `${timestamp}_${id.replace(/[\/\\:]/g, '-')}.jsonl`);
+    const versionHash = this.computeVersionHash(todo.file);
+
+    const historyEntry = this.historyStore.beginExecution({
+      type: 'todo',
+      targetId: id,
+      label: todo.text,
+      sourceFile: todo.file,
+      logFile,
+      versionHash,
+      metadata: {
+        priority: todo.priority
+      }
+    });
 
     const execution: TodoExecution = {
       id: executionId,
       todoId: id,
       startTime: new Date(),
       status: 'running',
-      logFile
+      logFile,
+      historyId: historyEntry.id
     };
 
     this.executions.set(executionId, execution);
     todo.lastExecution = execution;
+    this.markChanged();
+
+    void this.logViewer.openLog({
+      type: 'todo',
+      id,
+      title: todo.text,
+      logFile,
+      run: {
+        status: 'running',
+        startTime: historyEntry.startTime,
+        versionHash,
+        sourceFile: todo.file
+      }
+    });
 
     try {
       // Prepare prompt for Claude
@@ -208,7 +250,17 @@ export class TodoManager {
       todo.executionStatus = 'success';
       todo.completed = true;
       execution.status = 'success';
-      execution.endTime = new Date();
+      const completedAt = new Date();
+      execution.endTime = completedAt;
+      this.historyStore.completeExecution(historyEntry.id, {
+        status: 'success',
+        endTime: completedAt.toISOString()
+      });
+      this.logViewer.updateRunContext('todo', id, {
+        status: 'success',
+        endTime: completedAt.toISOString()
+      });
+      this.markChanged();
 
       // Update the file
       await this.updateTodoInFile(todo);
@@ -218,8 +270,22 @@ export class TodoManager {
       // Update status on error
       todo.executionStatus = 'failed';
       execution.status = 'failed';
-      execution.endTime = new Date();
+      const completedAt = new Date();
+      execution.endTime = completedAt;
       execution.error = error instanceof Error ? error.message : String(error);
+      this.historyStore.completeExecution(historyEntry.id, {
+        status: 'failed',
+        metadata: {
+          error: error instanceof Error ? error.message : String(error)
+        },
+        endTime: completedAt.toISOString()
+      });
+      this.logViewer.updateRunContext('todo', id, {
+        status: 'failed',
+        endTime: completedAt.toISOString(),
+        error: error instanceof Error ? error.message : String(error)
+      });
+      this.markChanged();
 
       vscode.window.showErrorMessage(`TODO "${todo.text}" failed: ${error}`);
     }
@@ -266,8 +332,20 @@ export class TodoManager {
 
     if (todo.lastExecution) {
       todo.lastExecution.status = 'failed';
-      todo.lastExecution.endTime = new Date();
+      const endedAt = new Date();
+      todo.lastExecution.endTime = endedAt;
+      if (todo.lastExecution.historyId) {
+        this.historyStore.completeExecution(todo.lastExecution.historyId, {
+          status: 'stopped',
+          endTime: endedAt.toISOString()
+        });
+        this.logViewer.updateRunContext('todo', id, {
+          status: 'stopped',
+          endTime: endedAt.toISOString()
+        });
+      }
     }
+    this.markChanged();
 
     vscode.window.showInformationMessage(`TODO "${todo.text}" stopped`);
   }
@@ -323,5 +401,43 @@ export class TodoManager {
   dispose(): void {
     this.watcher?.dispose();
     this.executor.dispose();
+    this._onDidChange.dispose();
+  }
+
+  getHistory(todoId: string): ExecutionHistoryEntry[] {
+    return this.historyStore.getHistory('todo', todoId);
+  }
+
+  getAllHistory(): ExecutionHistoryEntry[] {
+    const allHistory: ExecutionHistoryEntry[] = [];
+    this.todos.forEach(todoList => {
+      todoList.forEach(todo => {
+        const history = this.getHistory(todo.id);
+        allHistory.push(...history);
+      });
+    });
+    return allHistory;
+  }
+
+  getChangeVersion(): number {
+    return this.changeVersion;
+  }
+
+  private markChanged(): void {
+    this.changeVersion++;
+    this._onDidChange.fire();
+  }
+
+  private computeVersionHash(filePath: string): string | undefined {
+    try {
+      if (fs.existsSync(filePath)) {
+        const content = fs.readFileSync(filePath, 'utf8');
+        return crypto.createHash('md5').update(content).digest('hex');
+      }
+    } catch (error) {
+      console.error('Failed to compute TODO version hash', error);
+    }
+
+    return undefined;
   }
 }

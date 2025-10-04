@@ -5,6 +5,7 @@ export interface AgentConfig {
   parameters?: Record<string, any>;
   tags?: string[];
   icon?: string;
+  sourcePath?: string;
 }
 
 export interface AgentStatus {
@@ -13,6 +14,9 @@ export interface AgentStatus {
   pid?: number;
   startTime?: Date;
   error?: string;
+  logFile?: string;
+  lastCompleted?: Date;
+  historyId?: string;
 }
 
 export interface TodoItem {
@@ -35,6 +39,7 @@ export interface TodoExecution {
   status: 'running' | 'success' | 'failed';
   logFile: string;
   error?: string;
+  historyId?: string;
 }
 
 export interface ClaudeCommandOptions {
@@ -44,8 +49,6 @@ export interface ClaudeCommandOptions {
   '--print'?: boolean;
   '--output-format'?: 'stream-json' | 'text';
   '--model'?: string;
-  '--max-tokens'?: number;
-  '--temperature'?: number;
   '--mcp-config'?: string;
 }
 

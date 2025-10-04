@@ -1,16 +1,29 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import { AgentConfig, AgentStatus } from '../types';
+import { LogViewer } from '../utils/logViewer';
+import { HistoryStore, ExecutionHistoryEntry } from '../utils/historyStore';
 import { ClaudeCodeExecutor } from './claudeCodeExecutor';
+import { Logger } from '../utils/logger';
 
 export class AgentManager {
   private agents: Map<string, AgentConfig> = new Map();
   private statuses: Map<string, AgentStatus> = new Map();
   private executor: ClaudeCodeExecutor;
   private watcher?: vscode.FileSystemWatcher;
+  private readonly agentSources: Map<string, string> = new Map();
+  private changeVersion = 0;
+  private readonly _onDidChange = new vscode.EventEmitter<void>();
 
-  constructor(private workspaceRoot: string) {
+  readonly onDidChange: vscode.Event<void> = this._onDidChange.event;
+
+  constructor(
+    private workspaceRoot: string,
+    private readonly logViewer: LogViewer,
+    private readonly historyStore: HistoryStore
+  ) {
     this.executor = new ClaudeCodeExecutor();
     this.loadAgents();
     this.setupWatcher();
@@ -44,10 +57,12 @@ export class AgentManager {
 
     if (!fs.existsSync(agentDir)) {
       fs.mkdirSync(agentDir, { recursive: true });
+      this.markChanged();
       return;
     }
 
     this.agents.clear();
+    this.agentSources.clear();
 
     const files = fs.readdirSync(agentDir);
     for (const file of files) {
@@ -59,13 +74,18 @@ export class AgentManager {
           let agent: AgentConfig;
 
           if (file.endsWith('.json')) {
-            agent = JSON.parse(content);
+            const parsed = JSON.parse(content);
+            agent = {
+              ...parsed,
+              sourcePath: filePath
+            };
           } else {
             // Parse markdown format
-            agent = this.parseMarkdownAgent(content, file);
+            agent = this.parseMarkdownAgent(content, file, filePath);
           }
 
           this.agents.set(agent.name, agent);
+          this.agentSources.set(agent.name, filePath);
 
           // Initialize status if not exists
           if (!this.statuses.has(agent.name)) {
@@ -79,9 +99,11 @@ export class AgentManager {
         }
       }
     }
+
+    this.markChanged();
   }
 
-  private parseMarkdownAgent(content: string, filename: string): AgentConfig {
+  private parseMarkdownAgent(content: string, filename: string, filePath: string): AgentConfig {
     // Extract name from filename or first heading
     const nameMatch = content.match(/^#\s+(.+)$/m);
     const name = nameMatch ? nameMatch[1] : path.basename(filename, path.extname(filename));
@@ -114,7 +136,8 @@ export class AgentManager {
       description,
       prompt,
       parameters,
-      tags
+      tags,
+      sourcePath: filePath
     };
   }
 
@@ -146,16 +169,44 @@ export class AgentManager {
       return;
     }
 
+    // Create log file
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const logFile = path.join(this.getLogDir(), name, `${timestamp}.jsonl`);
+    const sourcePath = agent.sourcePath || this.agentSources.get(name);
+    const versionHash = this.computeVersionHash(agent, sourcePath);
+
+    const historyEntry = this.historyStore.beginExecution({
+      type: 'agent',
+      targetId: name,
+      label: agent.name,
+      sourceFile: sourcePath,
+      logFile,
+      versionHash
+    });
+
     // Update status
     this.statuses.set(name, {
       name,
       state: 'running',
-      startTime: new Date()
+      startTime: new Date(),
+      logFile,
+      historyId: historyEntry.id
     });
+    this.markChanged();
 
-    // Create log file
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const logFile = path.join(this.getLogDir(), name, `${timestamp}.jsonl`);
+    const title = agent.description ? `${agent.name} — ${agent.description}` : agent.name;
+    void this.logViewer.openLog({
+      type: 'agent',
+      id: name,
+      title,
+      logFile,
+      run: {
+        status: 'running',
+        startTime: historyEntry.startTime,
+        versionHash,
+        sourceFile: sourcePath
+      }
+    });
 
     try {
       await this.executor.execute(
@@ -166,19 +217,49 @@ export class AgentManager {
       );
 
       // Update status on completion
+      const completedAt = new Date();
       this.statuses.set(name, {
         name,
-        state: 'idle'
+        state: 'idle',
+        logFile,
+        lastCompleted: completedAt,
+        historyId: historyEntry.id
       });
+      this.historyStore.completeExecution(historyEntry.id, {
+        status: 'success',
+        endTime: completedAt.toISOString()
+      });
+      this.logViewer.updateRunContext('agent', name, {
+        status: 'success',
+        endTime: completedAt.toISOString()
+      });
+      this.markChanged();
 
       vscode.window.showInformationMessage(`Agent ${name} completed successfully`);
     } catch (error) {
       // Update status on error
+      const completedAt = new Date();
       this.statuses.set(name, {
         name,
         state: 'error',
+        error: error instanceof Error ? error.message : String(error),
+        logFile,
+        lastCompleted: completedAt,
+        historyId: historyEntry.id
+      });
+      this.historyStore.completeExecution(historyEntry.id, {
+        status: 'failed',
+        metadata: {
+          error: error instanceof Error ? error.message : String(error)
+        },
+        endTime: completedAt.toISOString()
+      });
+      this.logViewer.updateRunContext('agent', name, {
+        status: 'failed',
+        endTime: completedAt.toISOString(),
         error: error instanceof Error ? error.message : String(error)
       });
+      this.markChanged();
 
       vscode.window.showErrorMessage(`Agent ${name} failed: ${error}`);
     }
@@ -194,10 +275,25 @@ export class AgentManager {
     await this.executor.stop(`agent-${name}`);
 
     // Update status
+    const endedAt = new Date();
     this.statuses.set(name, {
       name,
-      state: 'idle'
+      state: 'idle',
+      logFile: status?.logFile,
+      lastCompleted: endedAt,
+      historyId: status?.historyId
     });
+    if (status?.historyId) {
+      this.historyStore.completeExecution(status.historyId, {
+        status: 'stopped',
+        endTime: endedAt.toISOString()
+      });
+      this.logViewer.updateRunContext('agent', name, {
+        status: 'stopped',
+        endTime: endedAt.toISOString()
+      });
+    }
+    this.markChanged();
 
     vscode.window.showInformationMessage(`Agent ${name} stopped`);
   }
@@ -218,5 +314,50 @@ export class AgentManager {
     this.stopAllAgents();
     this.watcher?.dispose();
     this.executor.dispose();
+    this._onDidChange.dispose();
+  }
+
+  getHistory(name: string): ExecutionHistoryEntry[] {
+    return this.historyStore.getHistory('agent', name);
+  }
+
+  getAllHistory(): ExecutionHistoryEntry[] {
+    const allHistory: ExecutionHistoryEntry[] = [];
+    this.agents.forEach((_agent, name) => {
+      const history = this.getHistory(name);
+      allHistory.push(...history);
+    });
+    return allHistory;
+  }
+
+  getAgentSource(name: string): string | undefined {
+    const agent = this.agents.get(name);
+    return agent?.sourcePath || this.agentSources.get(name);
+  }
+
+  getChangeVersion(): number {
+    return this.changeVersion;
+  }
+
+  private markChanged(): void {
+    this.changeVersion++;
+    this._onDidChange.fire();
+  }
+
+  private computeVersionHash(agent: AgentConfig, sourcePath?: string): string | undefined {
+    try {
+      if (sourcePath && fs.existsSync(sourcePath)) {
+        const content = fs.readFileSync(sourcePath, 'utf8');
+        return crypto.createHash('md5').update(content).digest('hex');
+      }
+
+      if (agent.prompt) {
+        return crypto.createHash('md5').update(agent.prompt).digest('hex');
+      }
+    } catch (error) {
+      console.error('Failed to compute agent version hash', error);
+    }
+
+    return undefined;
   }
 }

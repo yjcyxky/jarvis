@@ -43,6 +43,31 @@
         "icon": "$(run)"
       },
       {
+        "command": "jarvis.openAgentLog",
+        "title": "Jarvis: Open Agent Log",
+        "icon": "$(output)"
+      },
+      {
+        "command": "jarvis.openTodoLog",
+        "title": "Jarvis: Open TODO Log",
+        "icon": "$(output)"
+      },
+      {
+        "command": "jarvis.openAgentSource",
+        "title": "Jarvis: Open Agent Prompt",
+        "icon": "$(book)"
+      },
+      {
+        "command": "jarvis.openTodoSource",
+        "title": "Jarvis: Open TODO List",
+        "icon": "$(book)"
+      },
+      {
+        "command": "jarvis.openExecutionLog",
+        "title": "Jarvis: Open Execution Log",
+        "icon": "$(history)"
+      },
+      {
         "command": "jarvis.viewLogs",
         "title": "Jarvis: View Logs",
         "icon": "$(output)"
@@ -61,6 +86,31 @@
         "command": "jarvis.refreshTodos",
         "title": "Jarvis: Refresh TODOs",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "jarvis.quickAccess",
+        "title": "Jarvis",
+        "icon": "$(robot)"
+      },
+      {
+        "command": "jarvis.refreshStatistics",
+        "title": "Jarvis: Refresh Statistics",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "jarvis.viewAgentHistory",
+        "title": "Jarvis: View Agent History",
+        "icon": "$(history)"
+      },
+      {
+        "command": "jarvis.viewTodoHistory",
+        "title": "Jarvis: View TODO History",
+        "icon": "$(history)"
+      },
+      {
+        "command": "jarvis.viewAllHistory",
+        "title": "Jarvis: View All History",
+        "icon": "$(history)"
       }
     ],
     "viewsContainers": {
@@ -95,6 +145,12 @@
       ]
     },
     "menus": {
+      "editor/title": [
+        {
+          "command": "jarvis.quickAccess",
+          "group": "navigation@999"
+        }
+      ],
       "view/title": [
         {
           "command": "jarvis.refreshAgents",
@@ -104,6 +160,11 @@
         {
           "command": "jarvis.refreshTodos",
           "when": "view == jarvis.todos",
+          "group": "navigation"
+        },
+        {
+          "command": "jarvis.refreshStatistics",
+          "when": "view == jarvis.statistics",
           "group": "navigation"
         }
       ],
@@ -119,9 +180,99 @@
           "group": "inline"
         },
         {
+          "command": "jarvis.openAgentSource",
+          "when": "view == jarvis.agents && viewItem == agent.idle",
+          "group": "inline@2"
+        },
+        {
+          "command": "jarvis.openAgentSource",
+          "when": "view == jarvis.agents && viewItem == agent.running",
+          "group": "inline@2"
+        },
+        {
+          "command": "jarvis.openAgentSource",
+          "when": "view == jarvis.agents && viewItem == agent.error",
+          "group": "inline@2"
+        },
+        {
+          "command": "jarvis.openAgentSource",
+          "when": "view == jarvis.agents && viewItem == agent.paused",
+          "group": "inline@2"
+        },
+        {
+          "command": "jarvis.openAgentLog",
+          "when": "view == jarvis.agents && viewItem == agent.idle",
+          "group": "inline@3"
+        },
+        {
+          "command": "jarvis.openAgentLog",
+          "when": "view == jarvis.agents && viewItem == agent.running",
+          "group": "inline@3"
+        },
+        {
+          "command": "jarvis.openAgentLog",
+          "when": "view == jarvis.agents && viewItem == agent.error",
+          "group": "inline@3"
+        },
+        {
+          "command": "jarvis.openAgentLog",
+          "when": "view == jarvis.agents && viewItem == agent.paused",
+          "group": "inline@3"
+        },
+        {
           "command": "jarvis.executeTodo",
           "when": "view == jarvis.todos && viewItem == todo.pending",
           "group": "inline"
+        },
+        {
+          "command": "jarvis.openTodoSource",
+          "when": "view == jarvis.todos && viewItem == todo.pending",
+          "group": "inline@2"
+        },
+        {
+          "command": "jarvis.openTodoSource",
+          "when": "view == jarvis.todos && viewItem == todo.running",
+          "group": "inline@2"
+        },
+        {
+          "command": "jarvis.openTodoSource",
+          "when": "view == jarvis.todos && viewItem == todo.success",
+          "group": "inline@2"
+        },
+        {
+          "command": "jarvis.openTodoSource",
+          "when": "view == jarvis.todos && viewItem == todo.failed",
+          "group": "inline@2"
+        },
+        {
+          "command": "jarvis.openTodoSource",
+          "when": "view == jarvis.todos && viewItem == todo.paused",
+          "group": "inline@2"
+        },
+        {
+          "command": "jarvis.openTodoLog",
+          "when": "view == jarvis.todos && viewItem == todo.pending",
+          "group": "inline@3"
+        },
+        {
+          "command": "jarvis.openTodoLog",
+          "when": "view == jarvis.todos && viewItem == todo.running",
+          "group": "inline@3"
+        },
+        {
+          "command": "jarvis.openTodoLog",
+          "when": "view == jarvis.todos && viewItem == todo.success",
+          "group": "inline@3"
+        },
+        {
+          "command": "jarvis.openTodoLog",
+          "when": "view == jarvis.todos && viewItem == todo.failed",
+          "group": "inline@3"
+        },
+        {
+          "command": "jarvis.openTodoLog",
+          "when": "view == jarvis.todos && viewItem == todo.paused",
+          "group": "inline@3"
         }
       ]
     },
@@ -155,7 +306,7 @@
         },
         "jarvis.claude.defaultParams.permission-mode": {
           "type": "string",
-          "default": "auto",
+          "default": "always-allow",
           "enum": [
             "auto",
             "always-ask",
@@ -186,11 +337,6 @@
           "type": "string",
           "default": "claude-sonnet-4-5-20250929",
           "description": "Claude model to use"
-        },
-        "jarvis.claude.defaultParams.max-tokens": {
-          "type": "number",
-          "default": 4096,
-          "description": "Maximum tokens for Claude response"
         },
         "jarvis.claude.defaultParams.temperature": {
           "type": "number",
@@ -244,7 +390,7 @@
         },
         "jarvis.ui.refreshInterval": {
           "type": "number",
-          "default": 1000,
+          "default": 5000,
           "description": "UI refresh interval in ms"
         },
         "jarvis.ui.showNotifications": {

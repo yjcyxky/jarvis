@@ -52,8 +52,7 @@ Create agent configurations in `.jarvis/agents/`:
   "description": "Reviews code for quality and best practices",
   "prompt": "Review the current codebase and provide feedback",
   "parameters": {
-    "--model": "claude-sonnet-4-5-20250929",
-    "--temperature": 0.3
+    "--model": "claude-sonnet-4-5-20250929"
   },
   "tags": ["review", "quality"]
 }
@@ -72,8 +71,7 @@ Process the data files in the input directory and generate reports
 ## Parameters
 \`\`\`json
 {
-  "--model": "claude-sonnet-4-5-20250929",
-  "--max-tokens": 4096
+  "--model": "claude-sonnet-4-5-20250929"
 }
 \`\`\`
 

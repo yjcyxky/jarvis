@@ -2,11 +2,13 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { TodoItem } from '../types';
 import { TodoManager } from '../executors/todoManager';
+import { ViewHistoryTreeItem } from './agentTreeProvider';
 
 export class TodoTreeItem extends vscode.TreeItem {
   constructor(
     public readonly todo: TodoItem,
-    public readonly collapsibleState: vscode.TreeItemCollapsibleState
+    public readonly collapsibleState: vscode.TreeItemCollapsibleState,
+    public readonly historyCount: number
   ) {
     super(todo.text, collapsibleState);
 
@@ -17,6 +19,11 @@ export class TodoTreeItem extends vscode.TreeItem {
     this.checkboxState = todo.completed
       ? vscode.TreeItemCheckboxState.Checked
       : vscode.TreeItemCheckboxState.Unchecked;
+    this.command = {
+      command: 'jarvis.openTodoLog',
+      title: 'Open TODO Log',
+      arguments: [todo.id]
+    };
   }
 
   private getTooltip(): string {
@@ -27,7 +34,9 @@ export class TodoTreeItem extends vscode.TreeItem {
     if (this.todo.lastExecution) {
       tooltip += `\nLast run: ${this.todo.lastExecution.startTime.toLocaleString()}`;
       tooltip += `\nStatus: ${this.todo.lastExecution.status}`;
+      tooltip += `\nLog: ${this.todo.lastExecution.logFile}`;
     }
+    tooltip += `\nRuns: ${this.historyCount}`;
     return tooltip;
   }
 
@@ -54,6 +63,10 @@ export class TodoTreeItem extends vscode.TreeItem {
 
     parts.push(`[${path.basename(this.todo.file)}:${this.todo.line}]`);
 
+    if (this.historyCount > 0) {
+      parts.push(`(${this.historyCount})`);
+    }
+
     return parts.join(' ');
   }
 
@@ -75,17 +88,23 @@ export class TodoTreeItem extends vscode.TreeItem {
   }
 }
 
-export class TodoTreeProvider implements vscode.TreeDataProvider<TodoTreeItem> {
-  private _onDidChangeTreeData: vscode.EventEmitter<TodoTreeItem | undefined | null | void> =
-    new vscode.EventEmitter<TodoTreeItem | undefined | null | void>();
-  readonly onDidChangeTreeData: vscode.Event<TodoTreeItem | undefined | null | void> =
+export class TodoTreeProvider implements vscode.TreeDataProvider<TodoTreeItem | ViewHistoryTreeItem> {
+  private _onDidChangeTreeData: vscode.EventEmitter<TodoTreeItem | ViewHistoryTreeItem | undefined | null | void> =
+    new vscode.EventEmitter<TodoTreeItem | ViewHistoryTreeItem | undefined | null | void>();
+  readonly onDidChangeTreeData: vscode.Event<TodoTreeItem | ViewHistoryTreeItem | undefined | null | void> =
     this._onDidChangeTreeData.event;
 
   private groupByFile: boolean = true;
   private refreshTimer?: NodeJS.Timeout;
+  private readonly disposables: vscode.Disposable[] = [];
+  private lastRenderedVersion = -1;
 
   constructor(private todoManager: TodoManager) {
     this.startAutoRefresh();
+    this.disposables.push(
+      this.todoManager.onDidChange(() => this.refresh())
+    );
+    this.refresh(true);
   }
 
   private startAutoRefresh(): void {
@@ -98,20 +117,30 @@ export class TodoTreeProvider implements vscode.TreeDataProvider<TodoTreeItem> {
     }
   }
 
-  refresh(): void {
-    this._onDidChangeTreeData.fire();
+  refresh(force = false): void {
+    if (force) {
+      this.lastRenderedVersion = this.todoManager.getChangeVersion();
+      this._onDidChangeTreeData.fire();
+      return;
+    }
+
+    const version = this.todoManager.getChangeVersion();
+    if (version !== this.lastRenderedVersion) {
+      this.lastRenderedVersion = version;
+      this._onDidChangeTreeData.fire();
+    }
   }
 
   setGroupByFile(groupByFile: boolean): void {
     this.groupByFile = groupByFile;
-    this.refresh();
+    this.refresh(true);
   }
 
-  getTreeItem(element: TodoTreeItem): vscode.TreeItem {
+  getTreeItem(element: TodoTreeItem | ViewHistoryTreeItem): vscode.TreeItem {
     return element;
   }
 
-  getChildren(element?: TodoTreeItem | any): Thenable<any[]> {
+  getChildren(element?: TodoTreeItem | ViewHistoryTreeItem | any): Thenable<any[]> {
     if (!element) {
       // Root level
       if (this.groupByFile) {
@@ -144,41 +173,54 @@ export class TodoTreeProvider implements vscode.TreeDataProvider<TodoTreeItem> {
         const todos = this.todoManager.getAllTodos();
         const items = todos.map(todo => {
           const hasChildren = todo.children && todo.children.length > 0;
-          return new TodoTreeItem(
-            todo,
-            hasChildren
-              ? vscode.TreeItemCollapsibleState.Expanded
-              : vscode.TreeItemCollapsibleState.None
-          );
+          const historyCount = this.todoManager.getHistory(todo.id).length;
+          const collapsible = hasChildren || historyCount > 0
+            ? vscode.TreeItemCollapsibleState.Collapsed
+            : vscode.TreeItemCollapsibleState.None;
+          return new TodoTreeItem(todo, collapsible, historyCount);
         });
         return Promise.resolve(items);
       }
     }
 
     if (element instanceof TodoTreeItem) {
+      const results: vscode.TreeItem[] = [];
+
       // Return children of a todo
       if (element.todo.children) {
         const items = element.todo.children.map(child => {
           const hasChildren = child.children && child.children.length > 0;
-          return new TodoTreeItem(
-            child,
-            hasChildren
-              ? vscode.TreeItemCollapsibleState.Expanded
-              : vscode.TreeItemCollapsibleState.None
-          );
+          const historyCount = this.todoManager.getHistory(child.id).length;
+          const collapsible = hasChildren || historyCount > 0
+            ? vscode.TreeItemCollapsibleState.Collapsed
+            : vscode.TreeItemCollapsibleState.None;
+          return new TodoTreeItem(child, collapsible, historyCount);
         });
-        return Promise.resolve(items);
+        results.push(...items);
       }
+
+      // Add "View History" button if there's history
+      const history = this.todoManager.getHistory(element.todo.id);
+      if (history.length > 0) {
+        const historyItem = new ViewHistoryTreeItem('todo', element.todo.id, history.length);
+        historyItem.command = {
+          command: 'jarvis.viewTodoHistory',
+          title: 'View TODO History',
+          arguments: [element.todo.id]
+        };
+        results.push(historyItem);
+      }
+
+      return Promise.resolve(results);
     } else if (element.todos) {
       // This is a file group, return its todos
       const items = element.todos.map((todo: TodoItem) => {
         const hasChildren = todo.children && todo.children.length > 0;
-        return new TodoTreeItem(
-          todo,
-          hasChildren
-            ? vscode.TreeItemCollapsibleState.Expanded
-            : vscode.TreeItemCollapsibleState.None
-        );
+        const historyCount = this.todoManager.getHistory(todo.id).length;
+        const collapsible = hasChildren || historyCount > 0
+          ? vscode.TreeItemCollapsibleState.Collapsed
+          : vscode.TreeItemCollapsibleState.None;
+        return new TodoTreeItem(todo, collapsible, historyCount);
       });
       return Promise.resolve(items);
     }
@@ -190,5 +232,6 @@ export class TodoTreeProvider implements vscode.TreeDataProvider<TodoTreeItem> {
     if (this.refreshTimer) {
       clearInterval(this.refreshTimer);
     }
+    this.disposables.forEach(d => d.dispose());
   }
 }
