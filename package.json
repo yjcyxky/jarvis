@@ -1,0 +1,292 @@
+{
+  "name": "jarvis-vscode",
+  "displayName": "Jarvis - AI Agent Manager",
+  "description": "Manage and execute AI-based agents with Claude Code integration",
+  "version": "0.1.0",
+  "publisher": "jarvis-team",
+  "icon": "resources/jarvis-icon.png",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Debuggers",
+    "Snippets"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "claude",
+    "automation",
+    "todo"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/jarvis-vscode"
+  },
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "jarvis.startAgent",
+        "title": "Jarvis: Start Agent",
+        "icon": "$(play)"
+      },
+      {
+        "command": "jarvis.stopAgent",
+        "title": "Jarvis: Stop Agent",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "jarvis.executeTodo",
+        "title": "Jarvis: Execute TODO",
+        "icon": "$(run)"
+      },
+      {
+        "command": "jarvis.viewLogs",
+        "title": "Jarvis: View Logs",
+        "icon": "$(output)"
+      },
+      {
+        "command": "jarvis.configure",
+        "title": "Jarvis: Configure",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "jarvis.refreshAgents",
+        "title": "Jarvis: Refresh Agents",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "jarvis.refreshTodos",
+        "title": "Jarvis: Refresh TODOs",
+        "icon": "$(refresh)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "jarvis",
+          "title": "Jarvis",
+          "icon": "resources/jarvis-icon.png"
+        }
+      ]
+    },
+    "views": {
+      "jarvis": [
+        {
+          "id": "jarvis.agents",
+          "name": "Agents",
+          "icon": "$(robot)",
+          "contextualTitle": "Jarvis Agents"
+        },
+        {
+          "id": "jarvis.todos",
+          "name": "TODOs",
+          "icon": "$(checklist)",
+          "contextualTitle": "Jarvis TODOs"
+        },
+        {
+          "id": "jarvis.statistics",
+          "name": "Statistics",
+          "icon": "$(graph)",
+          "contextualTitle": "Jarvis Statistics"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "jarvis.refreshAgents",
+          "when": "view == jarvis.agents",
+          "group": "navigation"
+        },
+        {
+          "command": "jarvis.refreshTodos",
+          "when": "view == jarvis.todos",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "jarvis.startAgent",
+          "when": "view == jarvis.agents && viewItem == agent.idle",
+          "group": "inline"
+        },
+        {
+          "command": "jarvis.stopAgent",
+          "when": "view == jarvis.agents && viewItem == agent.running",
+          "group": "inline"
+        },
+        {
+          "command": "jarvis.executeTodo",
+          "when": "view == jarvis.todos && viewItem == todo.pending",
+          "group": "inline"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Jarvis",
+      "properties": {
+        "jarvis.paths.agentDir": {
+          "type": "string",
+          "default": ".jarvis/agents",
+          "description": "Directory for agent configurations"
+        },
+        "jarvis.paths.logDir": {
+          "type": "string",
+          "default": ".jarvis/agent-logs",
+          "description": "Directory for agent logs"
+        },
+        "jarvis.paths.todoDir": {
+          "type": "string",
+          "default": ".jarvis/todos",
+          "description": "Directory for TODO files"
+        },
+        "jarvis.paths.todoLogDir": {
+          "type": "string",
+          "default": ".jarvis/todo-logs",
+          "description": "Directory for TODO execution logs"
+        },
+        "jarvis.claude.executable": {
+          "type": "string",
+          "default": "claude",
+          "description": "Path to Claude executable"
+        },
+        "jarvis.claude.defaultParams.permission-mode": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "always-ask",
+            "always-allow"
+          ],
+          "description": "Permission mode for Claude"
+        },
+        "jarvis.claude.defaultParams.output-format": {
+          "type": "string",
+          "default": "stream-json",
+          "enum": [
+            "stream-json",
+            "text"
+          ],
+          "description": "Output format for Claude"
+        },
+        "jarvis.claude.defaultParams.verbose": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable verbose output"
+        },
+        "jarvis.claude.defaultParams.print": {
+          "type": "boolean",
+          "default": true,
+          "description": "Print output to console"
+        },
+        "jarvis.claude.defaultParams.model": {
+          "type": "string",
+          "default": "claude-sonnet-4-5-20250929",
+          "description": "Claude model to use"
+        },
+        "jarvis.claude.defaultParams.max-tokens": {
+          "type": "number",
+          "default": 4096,
+          "description": "Maximum tokens for Claude response"
+        },
+        "jarvis.claude.defaultParams.temperature": {
+          "type": "number",
+          "default": 0.7,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Temperature for Claude responses"
+        },
+        "jarvis.claude.requiredMcps": {
+          "type": "array",
+          "default": [
+            "mcpx",
+            "chrome-devtools-mcp"
+          ],
+          "description": "Required MCP packages"
+        },
+        "jarvis.claude.environment.checkOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "Check Claude environment on startup"
+        },
+        "jarvis.claude.environment.autoInstallMcp": {
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-install missing MCP packages"
+        },
+        "jarvis.logs.format": {
+          "type": "string",
+          "default": "jsonl",
+          "enum": [
+            "jsonl",
+            "json",
+            "text"
+          ],
+          "description": "Log file format"
+        },
+        "jarvis.logs.realtimeFlush": {
+          "type": "boolean",
+          "default": true,
+          "description": "Flush logs in real-time"
+        },
+        "jarvis.logs.retentionDays": {
+          "type": "number",
+          "default": 30,
+          "description": "Days to retain logs"
+        },
+        "jarvis.ui.autoRefresh": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-refresh UI"
+        },
+        "jarvis.ui.refreshInterval": {
+          "type": "number",
+          "default": 1000,
+          "description": "UI refresh interval in ms"
+        },
+        "jarvis.ui.showNotifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show notifications"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "webpack --mode production",
+    "watch": "webpack --mode development --watch",
+    "test": "jest",
+    "lint": "eslint src --ext ts",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.11",
+    "@types/node": "^20.10.5",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.16.0",
+    "@typescript-eslint/parser": "^6.16.0",
+    "esbuild-loader": "^4.0.3",
+    "eslint": "^8.56.0",
+    "eslint-config-prettier": "^9.1.0",
+    "husky": "^8.0.3",
+    "jest": "^29.7.0",
+    "prettier": "^3.1.1",
+    "ts-jest": "^29.1.1",
+    "typescript": "^5.3.3",
+    "webpack": "^5.89.0",
+    "webpack-cli": "^5.1.4"
+  },
+  "dependencies": {
+    "jsonl": "^1.0.0",
+    "vsce": "^2.15.0"
+  },
+  "activationEvents": [
+    "workspaceContains:.jarvis/**"
+  ]
+}

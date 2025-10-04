@@ -1,0 +1,327 @@
+import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
+import { TodoItem, TodoExecution } from '../types';
+import { ClaudeCodeExecutor } from './claudeCodeExecutor';
+
+export class TodoManager {
+  private todos: Map<string, TodoItem[]> = new Map();
+  private executor: ClaudeCodeExecutor;
+  private watcher?: vscode.FileSystemWatcher;
+  private executions: Map<string, TodoExecution> = new Map();
+
+  constructor(private workspaceRoot: string) {
+    this.executor = new ClaudeCodeExecutor();
+    this.loadTodos();
+    this.setupWatcher();
+  }
+
+  private getTodoDir(): string {
+    const config = vscode.workspace.getConfiguration('jarvis.paths');
+    const todoDir = config.get<string>('todoDir', '.jarvis/todos');
+    return path.join(this.workspaceRoot, todoDir);
+  }
+
+  private getTodoLogDir(): string {
+    const config = vscode.workspace.getConfiguration('jarvis.paths');
+    const todoLogDir = config.get<string>('todoLogDir', '.jarvis/todo-logs');
+    return path.join(this.workspaceRoot, todoLogDir);
+  }
+
+  private setupWatcher(): void {
+    const todoDir = this.getTodoDir();
+    const pattern = new vscode.RelativePattern(todoDir, '**/*.md');
+
+    this.watcher = vscode.workspace.createFileSystemWatcher(pattern);
+
+    this.watcher.onDidCreate(() => this.loadTodos());
+    this.watcher.onDidChange(() => this.loadTodos());
+    this.watcher.onDidDelete(() => this.loadTodos());
+  }
+
+  private loadTodos(): void {
+    const todoDir = this.getTodoDir();
+
+    if (!fs.existsSync(todoDir)) {
+      fs.mkdirSync(todoDir, { recursive: true });
+      return;
+    }
+
+    this.todos.clear();
+
+    const files = fs.readdirSync(todoDir);
+    for (const file of files) {
+      if (file.endsWith('.md')) {
+        try {
+          const filePath = path.join(todoDir, file);
+          const content = fs.readFileSync(filePath, 'utf-8');
+          const todos = this.parseTodoFile(content, filePath);
+          this.todos.set(filePath, todos);
+        } catch (error) {
+          vscode.window.showErrorMessage(`Failed to load TODO file ${file}: ${error}`);
+        }
+      }
+    }
+  }
+
+  private parseTodoFile(content: string, filePath: string): TodoItem[] {
+    const lines = content.split('\n');
+    const todos: TodoItem[] = [];
+    const stack: { item: TodoItem; indent: number }[] = [];
+
+    lines.forEach((line, lineNumber) => {
+      const todoMatch = line.match(/^(\s*)- \[([ xX])\] (.+)$/);
+
+      if (todoMatch) {
+        const indent = todoMatch[1].length;
+        const completed = todoMatch[2].toLowerCase() === 'x';
+        const text = todoMatch[3];
+
+        // Extract priority from text if present
+        let priority: 'high' | 'medium' | 'low' | undefined;
+        let cleanText = text;
+
+        if (text.includes('[HIGH]')) {
+          priority = 'high';
+          cleanText = text.replace('[HIGH]', '').trim();
+        } else if (text.includes('[MEDIUM]')) {
+          priority = 'medium';
+          cleanText = text.replace('[MEDIUM]', '').trim();
+        } else if (text.includes('[LOW]')) {
+          priority = 'low';
+          cleanText = text.replace('[LOW]', '').trim();
+        }
+
+        const todoItem: TodoItem = {
+          id: `${path.basename(filePath)}-${lineNumber}`,
+          text: cleanText,
+          completed,
+          priority,
+          file: filePath,
+          line: lineNumber + 1,
+          executionStatus: completed ? 'success' : 'pending',
+          children: []
+        };
+
+        // Find parent based on indentation
+        while (stack.length > 0 && stack[stack.length - 1].indent >= indent) {
+          stack.pop();
+        }
+
+        if (stack.length > 0) {
+          // This is a child item
+          const parent = stack[stack.length - 1].item;
+          if (!parent.children) {
+            parent.children = [];
+          }
+          parent.children.push(todoItem);
+        } else {
+          // This is a root item
+          todos.push(todoItem);
+        }
+
+        stack.push({ item: todoItem, indent });
+      }
+    });
+
+    return todos;
+  }
+
+  getAllTodos(): TodoItem[] {
+    const allTodos: TodoItem[] = [];
+    for (const todos of this.todos.values()) {
+      allTodos.push(...todos);
+    }
+    return allTodos;
+  }
+
+  getTodosByFile(filePath: string): TodoItem[] {
+    return this.todos.get(filePath) || [];
+  }
+
+  getTodoById(id: string): TodoItem | undefined {
+    for (const todos of this.todos.values()) {
+      const found = this.findTodoInTree(todos, id);
+      if (found) return found;
+    }
+    return undefined;
+  }
+
+  private findTodoInTree(todos: TodoItem[], id: string): TodoItem | undefined {
+    for (const todo of todos) {
+      if (todo.id === id) return todo;
+      if (todo.children) {
+        const found = this.findTodoInTree(todo.children, id);
+        if (found) return found;
+      }
+    }
+    return undefined;
+  }
+
+  async executeTodo(id: string): Promise<void> {
+    const todo = this.getTodoById(id);
+    if (!todo) {
+      throw new Error(`TODO ${id} not found`);
+    }
+
+    if (todo.completed) {
+      vscode.window.showWarningMessage(`TODO "${todo.text}" is already completed`);
+      return;
+    }
+
+    if (todo.executionStatus === 'running') {
+      vscode.window.showWarningMessage(`TODO "${todo.text}" is already running`);
+      return;
+    }
+
+    // Update status
+    todo.executionStatus = 'running';
+
+    // Create execution record
+    const executionId = `exec-${id}-${Date.now()}`;
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const logFile = path.join(this.getTodoLogDir(), `${timestamp}_${id.replace(/[\/\\:]/g, '-')}.jsonl`);
+
+    const execution: TodoExecution = {
+      id: executionId,
+      todoId: id,
+      startTime: new Date(),
+      status: 'running',
+      logFile
+    };
+
+    this.executions.set(executionId, execution);
+    todo.lastExecution = execution;
+
+    try {
+      // Prepare prompt for Claude
+      const prompt = this.buildTodoPrompt(todo);
+
+      await this.executor.execute(
+        `todo-${id}`,
+        prompt,
+        undefined,
+        logFile
+      );
+
+      // Update status on completion
+      todo.executionStatus = 'success';
+      todo.completed = true;
+      execution.status = 'success';
+      execution.endTime = new Date();
+
+      // Update the file
+      await this.updateTodoInFile(todo);
+
+      vscode.window.showInformationMessage(`TODO "${todo.text}" completed successfully`);
+    } catch (error) {
+      // Update status on error
+      todo.executionStatus = 'failed';
+      execution.status = 'failed';
+      execution.endTime = new Date();
+      execution.error = error instanceof Error ? error.message : String(error);
+
+      vscode.window.showErrorMessage(`TODO "${todo.text}" failed: ${error}`);
+    }
+  }
+
+  private buildTodoPrompt(todo: TodoItem): string {
+    let prompt = `Please complete the following task:\n\n${todo.text}`;
+
+    if (todo.priority) {
+      prompt += `\n\nPriority: ${todo.priority.toUpperCase()}`;
+    }
+
+    if (todo.children && todo.children.length > 0) {
+      prompt += '\n\nSubtasks:';
+      todo.children.forEach((child, index) => {
+        prompt += `\n${index + 1}. ${child.completed ? '[✓]' : '[ ]'} ${child.text}`;
+      });
+    }
+
+    prompt += '\n\nPlease complete this task and update any relevant files as needed.';
+
+    return prompt;
+  }
+
+  private async updateTodoInFile(todo: TodoItem): Promise<void> {
+    const content = fs.readFileSync(todo.file, 'utf-8');
+    const lines = content.split('\n');
+
+    if (lines[todo.line - 1]) {
+      lines[todo.line - 1] = lines[todo.line - 1].replace('- [ ]', '- [x]');
+      fs.writeFileSync(todo.file, lines.join('\n'));
+    }
+  }
+
+  async stopTodo(id: string): Promise<void> {
+    const todo = this.getTodoById(id);
+    if (!todo || todo.executionStatus !== 'running') {
+      vscode.window.showWarningMessage(`TODO is not running`);
+      return;
+    }
+
+    await this.executor.stop(`todo-${id}`);
+    todo.executionStatus = 'paused';
+
+    if (todo.lastExecution) {
+      todo.lastExecution.status = 'failed';
+      todo.lastExecution.endTime = new Date();
+    }
+
+    vscode.window.showInformationMessage(`TODO "${todo.text}" stopped`);
+  }
+
+  getExecutionHistory(todoId: string): TodoExecution[] {
+    const history: TodoExecution[] = [];
+    for (const execution of this.executions.values()) {
+      if (execution.todoId === todoId) {
+        history.push(execution);
+      }
+    }
+    return history.sort((a, b) => b.startTime.getTime() - a.startTime.getTime());
+  }
+
+  getStatistics(): {
+    total: number;
+    completed: number;
+    pending: number;
+    running: number;
+    failed: number;
+  } {
+    const todos = this.getAllTodos();
+    const stats = {
+      total: 0,
+      completed: 0,
+      pending: 0,
+      running: 0,
+      failed: 0
+    };
+
+    const countTodos = (items: TodoItem[]) => {
+      for (const item of items) {
+        stats.total++;
+        if (item.completed) stats.completed++;
+        if (item.executionStatus === 'pending') stats.pending++;
+        if (item.executionStatus === 'running') stats.running++;
+        if (item.executionStatus === 'failed') stats.failed++;
+
+        if (item.children) {
+          countTodos(item.children);
+        }
+      }
+    };
+
+    countTodos(todos);
+    return stats;
+  }
+
+  refresh(): void {
+    this.loadTodos();
+  }
+
+  dispose(): void {
+    this.watcher?.dispose();
+    this.executor.dispose();
+  }
+}
