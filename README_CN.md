@@ -34,6 +34,12 @@
 - 流式 JSON 输出处理
 - MCP（模型上下文协议）支持
 
+## 🎬 Demo
+
+![TODO Log](resources/assets//todo-log.png)
+
+![History](resources/assets/agent-history.png)
+
 ## 安装
 
 1. 从 VSCode 市场安装扩展

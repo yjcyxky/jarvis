@@ -34,6 +34,13 @@ A powerful VSCode extension for managing and executing AI-based agents with Clau
 - Stream JSON output processing
 - MCP (Model Context Protocol) support
 
+## 🎬 Demo
+
+![TODO Log](resources/assets//todo-log.png)
+
+![History](resources/assets/agent-history.png)
+
+
 ## Installation
 
 1. Install the extension from the VSCode Marketplace
