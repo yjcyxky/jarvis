@@ -1,4 +1,11 @@
-# Jarvis - VSCode AI Agent 管理器
+# Jarvis - Your Personal AI Assistant inside VSCode
+
+LLM 的发展让「个人 AI 助理」成为可能。Jarvis 让你在 VSCode 中，通过纯文本和 TODO 列表 驱动一整套智能代理系统。无需网页，无需 App，只需写下任务，Jarvis 即可自动执行：
+- 📬 每天早晨自动汇总并清理收件箱
+- 🧬 根据疾病名称，从 GEO 等数据库获取、清洗并可视化多组学数据
+- 🪶 为每个过程生成可追溯的记录和报告，支持复盘与质控
+
+一个纯文本驱动的工作流，一个属于你的个人 Agent 生态,在 VSCode 中，让 AI 成为你最懂的同事。
 
 一个强大的 VSCode 扩展，用于管理和执行基于 AI 的智能代理，集成 Claude Code。Jarvis 提供了运行子代理、管理 TODO 任务和跟踪执行日志的综合界面。
 

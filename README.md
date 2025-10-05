@@ -1,4 +1,12 @@
-# Jarvis - AI Agent Manager for VSCode
+# Jarvis - Your Personal AI Assistant inside VSCode
+
+LLMs are evolving fast — it’s time for a truly personal AI assistant. Jarvis turns plain text and TODO lists in VSCode into actionable tasks powered by AI agents. No web dashboards, no clutter — just write in markdown, and let Jarvis handle the rest:
+
+- 📬 Auto-summarize and clean your inbox every morning
+- 🧬 Fetch, clean, and visualize multi-omics data from GEO or other databases
+- 🪶 Keep full history and reports for review or QC agents
+
+A text-driven workflow, a personal agent ecosystem, and the freedom to automate your day — all within VSCode.
 
 A powerful VSCode extension for managing and executing AI-based agents with Claude Code integration. Jarvis provides a comprehensive interface for running subagents, managing TODO tasks, and tracking execution logs.
 
