@@ -4,6 +4,7 @@ LLMs are evolving fast — it’s time for a truly personal AI assistant. Jarvis
 
 - 📬 Auto-summarize and clean your inbox every morning
 - 🧬 Fetch, clean, and visualize multi-omics data from GEO or other databases
+- 🔄 More... (Customize your own agents and tools)
 - 🪶 Keep full history and reports for review or QC agents
 
 A text-driven workflow, a personal agent ecosystem, and the freedom to automate your day — all within VSCode.
