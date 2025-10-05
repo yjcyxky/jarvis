@@ -309,7 +309,9 @@ function registerCommands(context: vscode.ExtensionContext, logViewer: LogViewer
         { label: '$(checklist) Open TODOs View', value: 'open-todos' },
         { label: '$(graph) Open Statistics', value: 'open-stats' },
         { label: '$(settings-gear) Configure', value: 'configure' },
-        { label: '$(refresh) Refresh All', value: 'refresh-all' }
+        { label: '$(refresh) Refresh All', value: 'refresh-all' },
+        { label: '$(sync) Trigger Auto-Execute', value: 'trigger-auto-execute' },
+        { label: '$(info) Show Auto-Execute Status', value: 'show-status' }
       ];
 
       const selected = await vscode.window.showQuickPick(options, {
@@ -343,6 +345,12 @@ function registerCommands(context: vscode.ExtensionContext, logViewer: LogViewer
             vscode.commands.executeCommand('jarvis.refreshAgents');
             vscode.commands.executeCommand('jarvis.refreshTodos');
             break;
+          case 'trigger-auto-execute':
+            vscode.commands.executeCommand('jarvis.triggerAutoExecute');
+            break;
+          case 'show-status':
+            vscode.commands.executeCommand('jarvis.showAutoExecuteStatus');
+            break;
         }
       }
     })
@@ -371,6 +379,56 @@ function registerCommands(context: vscode.ExtensionContext, logViewer: LogViewer
       logger.info('Command', 'Manual statistics refresh triggered');
       statisticsProvider.refresh(true);
       vscode.window.showInformationMessage('Statistics refreshed');
+    })
+  );
+
+  // Auto-execute commands
+  context.subscriptions.push(
+    vscode.commands.registerCommand('jarvis.triggerAutoExecute', async () => {
+      try {
+        await agentManager.triggerAutoExecute();
+        vscode.window.showInformationMessage('Auto-execute triggered');
+      } catch (error) {
+        vscode.window.showErrorMessage(`Failed to trigger auto-execute: ${error}`);
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('jarvis.triggerManualExecute', async () => {
+      try {
+        await agentManager.triggerManualExecute();
+      } catch (error) {
+        vscode.window.showErrorMessage(`Failed to trigger manual execute: ${error}`);
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('jarvis.showAutoExecuteStatus', async () => {
+      const config = agentManager.getAutoExecuteConfig();
+      const fileStatus = agentManager.getFileChangeStatus();
+      
+      let statusMessage = `Auto-Execute Status:\n`;
+      statusMessage += `- Enabled: ${config.enabled ? 'Yes' : 'No'}\n`;
+      statusMessage += `- Agent: ${config.agentName || 'Not configured'}\n`;
+      statusMessage += `- Frequency: ${config.frequency}\n`;
+      
+      if (fileStatus.lastChangeTime) {
+        statusMessage += `- Last file change: ${fileStatus.lastChangeTime.toLocaleString()}\n`;
+      } else {
+        statusMessage += `- Last file change: No changes detected\n`;
+      }
+      
+      if (fileStatus.lastExecutionTime) {
+        statusMessage += `- Last execution: ${fileStatus.lastExecutionTime.toLocaleString()}\n`;
+      } else {
+        statusMessage += `- Last execution: Never executed\n`;
+      }
+      
+      statusMessage += `- Has pending changes: ${fileStatus.hasChanges ? 'Yes' : 'No'}`;
+      
+      vscode.window.showInformationMessage(statusMessage);
     })
   );
 

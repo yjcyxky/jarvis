@@ -98,6 +98,21 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "jarvis.triggerAutoExecute",
+        "title": "Jarvis: Trigger Auto-Execute",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "jarvis.triggerManualExecute",
+        "title": "Jarvis: Trigger Manual Execute",
+        "icon": "$(run-all)"
+      },
+      {
+        "command": "jarvis.showAutoExecuteStatus",
+        "title": "Jarvis: Show Auto-Execute Status",
+        "icon": "$(info)"
+      },
+      {
         "command": "jarvis.viewAgentHistory",
         "title": "Jarvis: View Agent History",
         "icon": "$(history)"
@@ -363,6 +378,31 @@
           "default": false,
           "description": "Auto-install missing MCP packages"
         },
+        "jarvis.autoExecute.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable automatic execution of configured agent"
+        },
+        "jarvis.autoExecute.agentName": {
+          "type": "string",
+          "default": "",
+          "description": "Name of the agent to execute automatically"
+        },
+        "jarvis.autoExecute.frequency": {
+          "type": "string",
+          "default": "daily",
+          "enum": [
+            "hourly",
+            "daily",
+            "manual"
+          ],
+          "description": "Frequency of automatic execution"
+        },
+        "jarvis.autoExecute.lastExecution": {
+          "type": "string",
+          "default": "",
+          "description": "Last execution time (ISO string)"
+        },
         "jarvis.logs.format": {
           "type": "string",
           "default": "jsonl",
@@ -438,7 +478,8 @@
   },
   "dependencies": {
     "jsonl": "^1.0.0",
-    "vsce": "^2.15.0"
+    "vsce": "^2.15.0",
+    "yaml": "^2.8.1"
   },
   "activationEvents": [
     "workspaceContains:.jarvis/**"

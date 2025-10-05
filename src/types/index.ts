@@ -2,10 +2,9 @@ export interface AgentConfig {
   name: string;
   description: string;
   prompt: string;
-  parameters?: Record<string, any>;
-  tags?: string[];
-  icon?: string;
-  sourcePath?: string;
+  tools?: string[];          // 可选:工具列表,undefined 表示继承所有工具
+  model?: string;            // 可选:'sonnet'|'opus'|'haiku'|'inherit'
+  sourcePath: string;        // 文件路径
 }
 
 export interface AgentStatus {
@@ -50,6 +49,7 @@ export interface ClaudeCommandOptions {
   '--output-format'?: 'stream-json' | 'text';
   '--model'?: string;
   '--mcp-config'?: string;
+  '--allowedTools'?: string[];
 }
 
 export interface ClaudeJsonMessage {
@@ -98,6 +98,12 @@ export interface JarvisConfig {
       checkOnStartup: boolean;
       autoInstallMcp: boolean;
     };
+  };
+  autoExecute: {
+    agentName?: string; // 配置自动执行的 agent 名称
+    enabled: boolean;   // 是否启用自动执行
+    frequency: 'daily' | 'hourly' | 'manual'; // 执行频率
+    lastExecution?: string; // 上次执行时间 (ISO 字符串)
   };
   logs: {
     format: 'jsonl' | 'json' | 'text';

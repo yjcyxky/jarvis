@@ -55,6 +55,10 @@ export class ClaudeCodeExecutor {
       command.push('--mcp-config', options?.['--mcp-config'] || defaultParams['mcp-config']);
     }
 
+    if (options?.['--allowedTools'] || defaultParams['allowedTools']) {
+      command.push('--allowedTools', options?.['--allowedTools'] || defaultParams['allowedTools']);
+    }
+
     return command;
   }
 

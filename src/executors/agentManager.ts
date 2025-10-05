@@ -2,20 +2,24 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { AgentConfig, AgentStatus } from '../types';
+import { AgentConfig, AgentStatus, ClaudeCommandOptions } from '../types';
 import { LogViewer } from '../utils/logViewer';
 import { HistoryStore, ExecutionHistoryEntry } from '../utils/historyStore';
 import { ClaudeCodeExecutor } from './claudeCodeExecutor';
 import { Logger } from '../utils/logger';
+import * as yaml from 'yaml';
 
 export class AgentManager {
   private agents: Map<string, AgentConfig> = new Map();
   private statuses: Map<string, AgentStatus> = new Map();
+  private logger: Logger;
   private executor: ClaudeCodeExecutor;
   private watcher?: vscode.FileSystemWatcher;
   private readonly agentSources: Map<string, string> = new Map();
   private changeVersion = 0;
   private readonly _onDidChange = new vscode.EventEmitter<void>();
+  private autoExecuteAgent?: string; // 配置的自动执行 agent 名称
+  private lastFileChangeTime?: Date; // 记录最后一次文件变化时间
 
   readonly onDidChange: vscode.Event<void> = this._onDidChange.event;
 
@@ -27,6 +31,16 @@ export class AgentManager {
     this.executor = new ClaudeCodeExecutor();
     this.loadAgents();
     this.setupWatcher();
+    this.logger = Logger.getInstance();
+    this.loadAutoExecuteConfig();
+    
+    // 监听配置变化
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('jarvis.autoExecute') || e.affectsConfiguration('jarvis.paths')) {
+        this.loadAutoExecuteConfig();
+        this.logger.info("AgentManager", "Configuration reloaded");
+      }
+    });
   }
 
   private getAgentDir(): string {
@@ -41,15 +55,151 @@ export class AgentManager {
     return path.join(this.workspaceRoot, logDir);
   }
 
+  private loadAutoExecuteConfig(): void {
+    const config = vscode.workspace.getConfiguration('jarvis.autoExecute');
+    const enabled = config.get<boolean>('enabled', false);
+    const agentName = config.get<string>('agentName');
+    const frequency = config.get<'daily' | 'hourly' | 'manual'>('frequency', 'daily');
+    
+    if (enabled && agentName && frequency !== 'manual') {
+      this.autoExecuteAgent = agentName;
+    } else {
+      this.autoExecuteAgent = undefined;
+    }
+  }
+
+  private processTemplate(content: string, variables: Record<string, string>): string {
+    let processed = content;
+    for (const [key, value] of Object.entries(variables)) {
+      const placeholder = `{{${key}}}`;
+      processed = processed.replace(new RegExp(placeholder, 'g'), value);
+    }
+    return processed;
+  }
+
+  private getTemplateVariables(): Record<string, string> {
+    const config = vscode.workspace.getConfiguration('jarvis.paths');
+    const agentDir = config.get<string>('agentDir', '.jarvis/agents');
+    
+    return {
+      agentDir: agentDir
+    };
+  }
+
+  private async autoExecuteIfConfigured(): Promise<void> {
+    if (!this.autoExecuteAgent) {
+      return;
+    }
+
+    const agent = this.agents.get(this.autoExecuteAgent);
+    if (!agent) {
+      this.logger.warn("AgentManager", `Auto-execute agent '${this.autoExecuteAgent}' not found`);
+      return;
+    }
+
+    // 检查 agent 是否已经在运行
+    const status = this.statuses.get(this.autoExecuteAgent);
+    if (status?.state === 'running') {
+      this.logger.info("AgentManager", `Auto-execute agent '${this.autoExecuteAgent}' is already running, skipping`);
+      return;
+    }
+
+    // 检查执行频率
+    if (!this.shouldExecuteBasedOnFrequency()) {
+      this.logger.info("AgentManager", `Auto-execute agent '${this.autoExecuteAgent}' skipped due to frequency limit`);
+      return;
+    }
+
+    try {
+      this.logger.info("AgentManager", `Auto-executing agent '${this.autoExecuteAgent}' due to directory changes`);
+      await this.startAgent(this.autoExecuteAgent);
+      this.updateLastExecutionTime();
+    } catch (error) {
+      this.logger.error("AgentManager", `Failed to auto-execute agent '${this.autoExecuteAgent}': ${error}`);
+    }
+  }
+
+  private shouldExecuteBasedOnFrequency(): boolean {
+    const config = vscode.workspace.getConfiguration('jarvis.autoExecute');
+    const frequency = config.get<'daily' | 'hourly' | 'manual'>('frequency', 'daily');
+    const lastExecution = config.get<string>('lastExecution');
+
+    // 手动模式不自动执行
+    if (frequency === 'manual') {
+      return false;
+    }
+
+    // 如果没有文件变化记录，不执行
+    if (!this.lastFileChangeTime) {
+      this.logger.info("AgentManager", "No file changes detected, skipping auto-execute");
+      return false;
+    }
+
+    // 如果没有执行记录，可以执行（首次执行）
+    if (!lastExecution) {
+      this.logger.info("AgentManager", "First execution, proceeding with auto-execute");
+      return true;
+    }
+
+    const lastExecutionTime = new Date(lastExecution);
+    const fileChangeTime = this.lastFileChangeTime;
+    
+    // 如果文件变化时间早于上次执行时间，说明没有新的变化
+    if (fileChangeTime <= lastExecutionTime) {
+      this.logger.info("AgentManager", "No new file changes since last execution, skipping auto-execute");
+      return false;
+    }
+
+    // 检查频率限制
+    const now = new Date();
+    const timeDiff = now.getTime() - lastExecutionTime.getTime();
+
+    switch (frequency) {
+      case 'hourly':
+        if (timeDiff < 60 * 60 * 1000) { // 1小时
+          this.logger.info("AgentManager", "Hourly frequency limit not met, skipping auto-execute");
+          return false;
+        }
+        break;
+      case 'daily':
+        if (timeDiff < 24 * 60 * 60 * 1000) { // 24小时
+          this.logger.info("AgentManager", "Daily frequency limit not met, skipping auto-execute");
+          return false;
+        }
+        break;
+    }
+
+    this.logger.info("AgentManager", "File changes detected and frequency limit met, proceeding with auto-execute");
+    return true;
+  }
+
+  private updateLastExecutionTime(): void {
+    const config = vscode.workspace.getConfiguration('jarvis.autoExecute');
+    const now = new Date().toISOString();
+    config.update('lastExecution', now, vscode.ConfigurationTarget.Workspace);
+  }
+
   private setupWatcher(): void {
     const agentDir = this.getAgentDir();
     const pattern = new vscode.RelativePattern(agentDir, '**/*.{json,md}');
 
     this.watcher = vscode.workspace.createFileSystemWatcher(pattern);
 
-    this.watcher.onDidCreate(() => this.loadAgents());
-    this.watcher.onDidChange(() => this.loadAgents());
-    this.watcher.onDidDelete(() => this.loadAgents());
+    this.watcher.onDidCreate(() => {
+      this.lastFileChangeTime = new Date();
+      this.loadAgents();
+      this.autoExecuteIfConfigured();
+    });
+    this.watcher.onDidChange(() => {
+      this.lastFileChangeTime = new Date();
+      this.loadAgents();
+      this.autoExecuteIfConfigured();
+    });
+    this.watcher.onDidDelete(() => {
+      this.lastFileChangeTime = new Date();
+      this.loadAgents();
+      this.autoExecuteIfConfigured();
+    });
   }
 
   private loadAgents(): void {
@@ -104,41 +254,70 @@ export class AgentManager {
   }
 
   private parseMarkdownAgent(content: string, filename: string, filePath: string): AgentConfig {
-    // Extract name from filename or first heading
-    const nameMatch = content.match(/^#\s+(.+)$/m);
-    const name = nameMatch ? nameMatch[1] : path.basename(filename, path.extname(filename));
+    // 提取 YAML frontmatter 和内容
+    const frontmatterMatch = content.match(/^---\s*\n([\s\S]+?)\n---\s*\n([\s\S]*)$/);
 
-    // Extract description from second paragraph or first non-heading content
-    const descMatch = content.match(/^#+\s+Description\s*\n+(.+?)(?:\n#|\n\n#|\n$)/ms);
-    const description = descMatch ? descMatch[1].trim() : '';
+    if (!frontmatterMatch) {
+      // 如果没有 frontmatter,尝试兼容旧格式或返回基本配置
+      const processedContent = this.processTemplate(content.trim(), this.getTemplateVariables());
+      return {
+        name: path.basename(filename, path.extname(filename)),
+        description: '',
+        prompt: processedContent,
+        tools: undefined, // undefined 表示继承所有工具
+        model: undefined, // undefined 表示使用默认模型
+        sourcePath: filePath
+      };
+    }
 
-    // Extract prompt from the rest of the content
-    const promptMatch = content.match(/^#+\s+Prompt\s*\n+([\s\S]+)$/m);
-    const prompt = promptMatch ? promptMatch[1].trim() : content;
+    const [, frontmatterStr, promptContent] = frontmatterMatch;
 
-    // Extract parameters if present
-    const paramsMatch = content.match(/^#+\s+Parameters\s*\n+```json\s*\n([\s\S]+?)\n```/m);
-    let parameters = {};
-    if (paramsMatch) {
-      try {
-        parameters = JSON.parse(paramsMatch[1]);
-      } catch (error) {
-        // Ignore parse errors
+    // 解析 YAML frontmatter
+    let frontmatter: any = {};
+    try {
+      frontmatter = yaml.parse(frontmatterStr);
+    } catch (error) {
+      console.error(`Failed to parse YAML frontmatter in ${filename}:`, error);
+      // 使用默认值
+    }
+
+    // 提取字段
+    const name = frontmatter.name || path.basename(filename, path.extname(filename));
+    const description = frontmatter.description || '';
+    
+    // 处理模板变量
+    const templateVariables = this.getTemplateVariables();
+    const processedPrompt = this.processTemplate(promptContent.trim(), templateVariables);
+
+    // 处理 tools 字段
+    // 可以是字符串(逗号分隔)或数组
+    let tools: string[] | undefined = undefined;
+    if (frontmatter.tools) {
+      if (typeof frontmatter.tools === 'string') {
+        tools = frontmatter.tools
+          .split(',')
+          .map((t: string) => t.trim())
+          .filter((t: string) => t.length > 0);
+      } else if (Array.isArray(frontmatter.tools)) {
+        tools = frontmatter.tools;
       }
     }
 
-    // Extract tags if present
-    const tagsMatch = content.match(/^#+\s+Tags\s*\n+(.+)$/m);
-    const tags = tagsMatch ? tagsMatch[1].split(',').map(t => t.trim()) : [];
+    // 处理 model 字段
+    const model = frontmatter.model || undefined;
 
-    return {
+    const agent: AgentConfig = {
       name,
       description,
-      prompt,
-      parameters,
-      tags,
+      prompt: processedPrompt,
+      tools,
+      model,
       sourcePath: filePath
     };
+
+    this.logger.info("AgentManager", `Loaded agent ${name}: ${JSON.stringify(agent)}`);
+
+    return agent;
   }
 
   getAgents(): AgentConfig[] {
@@ -208,11 +387,20 @@ export class AgentManager {
       }
     });
 
+    const commandOptions: ClaudeCommandOptions = {};
+    if (agent.model) {
+      commandOptions['--model'] = agent.model;
+    }
+
+    if (agent.tools) {
+      commandOptions['--allowedTools'] = agent.tools;
+    }
+
     try {
       await this.executor.execute(
         `agent-${name}`,
         agent.prompt,
-        agent.parameters,
+        commandOptions,
         logFile
       );
 
@@ -308,6 +496,68 @@ export class AgentManager {
 
   refresh(): void {
     this.loadAgents();
+  }
+
+  async triggerAutoExecute(): Promise<void> {
+    await this.autoExecuteIfConfigured();
+  }
+
+  async triggerManualExecute(): Promise<void> {
+    const config = vscode.workspace.getConfiguration('jarvis.autoExecute');
+    const agentName = config.get<string>('agentName');
+    
+    if (!agentName) {
+      vscode.window.showErrorMessage('No auto-execute agent configured');
+      return;
+    }
+
+    const agent = this.agents.get(agentName);
+    if (!agent) {
+      vscode.window.showErrorMessage(`Agent '${agentName}' not found`);
+      return;
+    }
+
+    // 检查 agent 是否已经在运行
+    const status = this.statuses.get(agentName);
+    if (status?.state === 'running') {
+      vscode.window.showWarningMessage(`Agent '${agentName}' is already running`);
+      return;
+    }
+
+    try {
+      vscode.window.showInformationMessage(`Manually executing agent '${agentName}'...`);
+      await this.startAgent(agentName);
+      this.updateLastExecutionTime();
+      vscode.window.showInformationMessage(`Agent '${agentName}' executed successfully`);
+    } catch (error) {
+      vscode.window.showErrorMessage(`Failed to execute agent '${agentName}': ${error}`);
+    }
+  }
+
+  getAutoExecuteAgent(): string | undefined {
+    return this.autoExecuteAgent;
+  }
+
+  getAutoExecuteConfig(): { agentName?: string; enabled: boolean; frequency: string; lastExecution?: string } {
+    const config = vscode.workspace.getConfiguration('jarvis.autoExecute');
+    return {
+      agentName: config.get<string>('agentName'),
+      enabled: config.get<boolean>('enabled', false),
+      frequency: config.get<'daily' | 'hourly' | 'manual'>('frequency', 'daily'),
+      lastExecution: config.get<string>('lastExecution')
+    };
+  }
+
+  getFileChangeStatus(): { hasChanges: boolean; lastChangeTime?: Date; lastExecutionTime?: Date } {
+    const config = vscode.workspace.getConfiguration('jarvis.autoExecute');
+    const lastExecution = config.get<string>('lastExecution');
+    
+    return {
+      hasChanges: this.lastFileChangeTime ? 
+        (!lastExecution || this.lastFileChangeTime > new Date(lastExecution)) : false,
+      lastChangeTime: this.lastFileChangeTime,
+      lastExecutionTime: lastExecution ? new Date(lastExecution) : undefined
+    };
   }
 
   dispose(): void {
