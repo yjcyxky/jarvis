@@ -1,9 +1,19 @@
-import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as vscode from 'vscode';
 import { ClaudeJsonMessage } from '../types';
+import { Logger } from './logger';
+import type { HistoryEntryType } from '../webviews/shared/historyMessages';
+import type {
+  LogDataPayload,
+  LogEntryViewModel,
+  LogFromWebviewMessage,
+  LogPayloadSegment,
+  LogStatsViewModel,
+  LogToWebviewMessage
+} from '../webviews/shared/logMessages';
 
-type LogType = 'todo' | 'agent';
+type LogType = HistoryEntryType;
 
 interface LogContext {
   type: LogType;
@@ -20,14 +30,16 @@ interface LogContext {
   };
 }
 
-interface StoredLogContext {
+interface LogPanelState {
+  panel: vscode.WebviewPanel;
   context: LogContext;
-  uri: vscode.Uri;
+  ready: boolean;
+  pendingMessages: LogToWebviewMessage[];
 }
 
-interface PayloadSegment {
-  text: string;
-  isCode?: boolean;
+interface WatcherRecord {
+  watcher?: fs.FSWatcher;
+  interval?: NodeJS.Timeout;
 }
 
 interface ParsedLogEntry {
@@ -36,160 +48,412 @@ interface ParsedLogEntry {
   status: string;
   timestamp?: Date;
   tokens?: number;
-  payload: PayloadSegment[];
+  payload: LogPayloadSegment[];
   raw: string;
 }
 
-export class LogViewer implements vscode.TextDocumentContentProvider, vscode.Disposable {
-  private static readonly scheme = 'jarvis-log';
+export class LogViewer implements vscode.Disposable {
+  private readonly logger = Logger.getInstance();
+  private readonly contexts = new Map<string, LogContext>();
+  private readonly panels = new Map<string, LogPanelState>();
+  private readonly watchers = new Map<string, WatcherRecord>();
+  private readonly updateTimers = new Map<string, NodeJS.Timeout>();
 
-  private readonly onDidChangeEmitter = new vscode.EventEmitter<vscode.Uri>();
-  readonly onDidChange = this.onDidChangeEmitter.event;
+  constructor(
+    private readonly extensionUri: vscode.Uri,
+    private readonly workspaceRoot: string
+  ) {}
 
-  private readonly logs = new Map<string, StoredLogContext>();
-  private readonly watchers = new Map<string, fs.FSWatcher>();
-  private readonly disposables: vscode.Disposable[] = [];
-
-  constructor(private readonly workspaceRoot: string) {
-    this.disposables.push(
-      vscode.workspace.registerTextDocumentContentProvider(LogViewer.scheme, this)
-    );
-
-    this.disposables.push(
-      vscode.workspace.onDidCloseTextDocument(document => {
-        if (document.uri.scheme === LogViewer.scheme) {
-          const key = this.getKeyFromUri(document.uri);
-          this.disposeWatcher(key);
-        }
-      })
-    );
+  dispose(): void {
+    this.panels.forEach(state => state.panel.dispose());
+    this.watchers.forEach(record => this.disposeWatcherRecord(record));
+    this.panels.clear();
+    this.watchers.clear();
+    this.updateTimers.forEach(timer => clearTimeout(timer));
+    this.updateTimers.clear();
+    this.contexts.clear();
   }
 
   async openLog(context: LogContext): Promise<void> {
     const key = this.getKey(context.type, context.id);
-    const existing = this.logs.get(key);
-    const uri = existing?.uri ?? this.createUri(context, key);
 
-    const storedContext = { ...context };
-    this.logs.set(key, { context: storedContext, uri });
-    this.ensureWatcher(key, uri, storedContext.logFile);
-    this.onDidChangeEmitter.fire(uri);
+    const existingContext = this.contexts.get(key);
+    const mergedContext: LogContext = {
+      ...(existingContext ?? {}),
+      ...context,
+      run: {
+        ...(existingContext?.run ?? {}),
+        ...(context.run ?? {})
+      }
+    };
+    this.contexts.set(key, mergedContext);
 
-    try {
-      const document = await vscode.workspace.openTextDocument(uri);
-      await vscode.window.showTextDocument(document, {
-        preview: false,
-        viewColumn: vscode.ViewColumn.Beside
-      });
-    } catch (error) {
-      vscode.window.showErrorMessage(
-        `Failed to open log view: ${error instanceof Error ? error.message : String(error)}`
-      );
+    const existing = this.panels.get(key);
+    if (existing) {
+      existing.context = mergedContext;
+      existing.panel.title = mergedContext.title;
+      existing.panel.reveal(vscode.ViewColumn.Beside, false);
+      this.ensureWatcher(key, mergedContext);
+      this.postData(existing);
+      return;
     }
+
+    const panel = vscode.window.createWebviewPanel(
+      'jarvisLog',
+      mergedContext.title,
+      { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false },
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'dist', 'webviews')]
+      }
+    );
+
+    panel.iconPath = vscode.Uri.file(path.join(this.extensionUri.fsPath, 'resources', 'jarvis-icon.png'));
+
+    const state: LogPanelState = {
+      panel,
+      context: mergedContext,
+      ready: false,
+      pendingMessages: []
+    };
+
+    this.panels.set(key, state);
+
+    panel.onDidDispose(() => {
+      this.disposeWatcher(key);
+      this.panels.delete(key);
+      this.contexts.delete(key);
+    });
+
+    panel.webview.onDidReceiveMessage(async (message: LogFromWebviewMessage) => {
+      switch (message.type) {
+        case 'ready':
+          state.ready = true;
+          this.flushPendingMessages(state);
+          break;
+        case 'refresh':
+          this.postData(state);
+          break;
+        case 'openLogFile':
+          await this.openLogFile(state.context.logFile);
+          break;
+        case 'openSource':
+          await this.openSourceFile(state.context.run?.sourceFile);
+          break;
+        default:
+          this.logger.warn('LogViewer', `Received unknown message: ${JSON.stringify(message)}`);
+      }
+    });
+
+    panel.webview.html = this.getHtml(panel.webview);
+
+    this.ensureWatcher(key, mergedContext);
+    this.postData(state);
   }
 
   updateRunContext(type: LogType, id: string, updates: LogContext['run']): void {
     const key = this.getKey(type, id);
-    const stored = this.logs.get(key);
-    if (!stored) {
+    const context = this.contexts.get(key);
+    if (!context) {
       return;
     }
 
-    stored.context.run = {
-      ...(stored.context.run || {}),
-      ...updates
+    context.run = {
+      ...(context.run ?? {}),
+      ...(updates ?? {})
     };
+    this.contexts.set(key, context);
 
-    this.logs.set(key, stored);
-    this.onDidChangeEmitter.fire(stored.uri);
+    const panelState = this.panels.get(key);
+    if (panelState) {
+      panelState.context = context;
+      this.postData(panelState);
+    }
   }
 
-  provideTextDocumentContent(uri: vscode.Uri): string {
-    const key = this.getKeyFromUri(uri);
-    const entry = this.logs.get(key);
+  private postData(state: LogPanelState): void {
+    try {
+      const payload = this.buildPayload(state.context);
+      this.enqueueMessage(state, { type: 'logData', payload });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.enqueueMessage(state, { type: 'showError', payload: { message } });
+    }
+  }
 
-    if (!entry) {
-      return 'Log context is no longer available.';
+  private enqueueMessage(state: LogPanelState, message: LogToWebviewMessage): void {
+    if (state.ready) {
+      state.panel.webview.postMessage(message).then(undefined, (err: any) => {
+        this.logger.error('LogViewer', 'Failed to post message to webview', err);
+      });
+    } else {
+      state.pendingMessages.push(message);
+    }
+  }
+
+  private flushPendingMessages(state: LogPanelState): void {
+    if (!state.ready) {
+      return;
     }
 
-    const { context } = entry;
-    const relativePath = path.relative(this.workspaceRoot, context.logFile);
-    const headerTitle = `${context.type === 'todo' ? 'TODO' : 'Agent'} — ${context.title}`;
-    const headerUnderline = '─'.repeat(Math.max(headerTitle.length, 12));
-
-    const headerLines: string[] = [
-      'Jarvis Log Viewer',
-      headerTitle,
-      `Log file: ${relativePath.startsWith('..') ? context.logFile : relativePath}`
-    ];
-
-    if (context.run) {
-      if (context.run.status) {
-        headerLines.push(`Status: ${context.run.status}`);
-      }
-      if (context.run.startTime) {
-        const start = new Date(context.run.startTime);
-        headerLines.push(`Started: ${isNaN(start.getTime()) ? context.run.startTime : start.toLocaleString()}`);
-      }
-      if (context.run.endTime) {
-        const end = new Date(context.run.endTime);
-        headerLines.push(`Ended: ${isNaN(end.getTime()) ? context.run.endTime : end.toLocaleString()}`);
-      }
-      if (context.run.versionHash) {
-        headerLines.push(`Version: ${context.run.versionHash}`);
-      }
-      if (context.run.sourceFile) {
-        const sourceRelative = path.relative(this.workspaceRoot, context.run.sourceFile);
-        headerLines.push(`Source: ${sourceRelative.startsWith('..') ? context.run.sourceFile : sourceRelative}`);
+    while (state.pendingMessages.length > 0) {
+      const message = state.pendingMessages.shift();
+      if (message) {
+        state.panel.webview.postMessage(message).then(undefined, (err: any) => {
+          this.logger.error('LogViewer', 'Failed to post queued message', err);
+        });
       }
     }
+  }
 
-    headerLines.push(headerUnderline);
-    const header = headerLines.join('\n');
+  private ensureWatcher(key: string, context: LogContext): void {
+    this.disposeWatcher(key);
+
+    const directory = path.dirname(context.logFile);
+    if (!fs.existsSync(directory)) {
+      fs.mkdirSync(directory, { recursive: true });
+    }
+    if (!fs.existsSync(context.logFile)) {
+      fs.writeFileSync(context.logFile, '', 'utf8');
+    }
+
+    const record: WatcherRecord = {};
 
     try {
-      if (!fs.existsSync(context.logFile)) {
-        return `${header}\nWaiting for log output…`;
-      }
-
-      const raw = fs.readFileSync(context.logFile, 'utf8');
-      if (!raw.trim()) {
-        return `${header}\nWaiting for log output…`;
-      }
-
-      const lines = raw
-        .split(/\r?\n/)
-        .map(line => line.trim())
-        .filter(line => line.length > 0);
-
-      if (lines.length === 0) {
-        return `${header}\nWaiting for log output…`;
-      }
-
-      const entries = lines.map((line, index) => this.parseLine(line, index));
-      const baseline = this.getBaselineTimestamp(entries);
-      const formatted: string[] = [];
-      let previous: Date | undefined;
-
-      for (const entry of entries) {
-        formatted.push(this.renderCard(entry, baseline, previous));
-        if (entry.timestamp) {
-          previous = entry.timestamp;
+      const watcher = fs.watch(context.logFile, { persistent: true }, eventType => {
+        if (eventType === 'change') {
+          this.scheduleUpdate(key);
         }
-      }
-
-      return `${header}\n\n${formatted.join('\n\n')}`;
+      });
+      record.watcher = watcher;
     } catch (error) {
-      return `${header}\nError reading log file: ${error instanceof Error ? error.message : String(error)}`;
+      this.logger.error('LogViewer', `Failed to watch log file ${context.logFile}`, error);
+    }
+
+    // Fallback polling in case file watching fails or misses events.
+    const interval = setInterval(() => {
+      if (fs.existsSync(context.logFile)) {
+        this.scheduleUpdate(key);
+      }
+    }, 2000);
+    record.interval = interval;
+
+    this.watchers.set(key, record);
+  }
+
+  private scheduleUpdate(key: string): void {
+    const existingTimer = this.updateTimers.get(key);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+
+    const timer = setTimeout(() => {
+      this.updateTimers.delete(key);
+      const state = this.panels.get(key);
+      if (state) {
+        this.postData(state);
+      }
+    }, 120);
+
+    this.updateTimers.set(key, timer);
+  }
+
+  private disposeWatcher(key: string): void {
+    const record = this.watchers.get(key);
+    if (record) {
+      this.disposeWatcherRecord(record);
+      this.watchers.delete(key);
+    }
+    const timer = this.updateTimers.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      this.updateTimers.delete(key);
     }
   }
 
-  dispose(): void {
-    this.watchers.forEach(watcher => watcher.close());
-    this.watchers.clear();
-    this.logs.clear();
-    this.disposables.forEach(d => d.dispose());
-    this.onDidChangeEmitter.dispose();
+  private disposeWatcherRecord(record: WatcherRecord): void {
+    if (record.watcher) {
+      record.watcher.close();
+    }
+    if (record.interval) {
+      clearInterval(record.interval);
+    }
+  }
+
+  private buildPayload(context: LogContext): LogDataPayload {
+    const { logFile } = context;
+
+    if (!fs.existsSync(logFile)) {
+      throw new Error('Log file not found.');
+    }
+
+    const entries = this.parseLogFile(logFile);
+    const baseline = this.getBaselineTimestamp(entries);
+    let previous: Date | undefined;
+
+    const viewEntries: LogEntryViewModel[] = entries.map(entry => {
+      const timestampIso = entry.timestamp ? entry.timestamp.toISOString() : undefined;
+      const relative = entry.timestamp && baseline
+        ? entry.timestamp.getTime() - baseline.getTime()
+        : undefined;
+      const delta = entry.timestamp && previous
+        ? entry.timestamp.getTime() - previous.getTime()
+        : undefined;
+      if (entry.timestamp) {
+        previous = entry.timestamp;
+      }
+
+      return {
+        index: entry.index,
+        badge: entry.badge,
+        status: entry.status,
+        timestamp: timestampIso,
+        relativeToStartMs: relative,
+        deltaPreviousMs: delta,
+        tokens: entry.tokens,
+        payload: entry.payload
+      };
+    });
+
+    const stats = this.calculateStats(entries);
+
+    const relativePath = this.getRelativePath(logFile);
+
+    return {
+      header: {
+        title: context.title,
+        type: context.type,
+        logFile,
+        relativePath,
+        run: context.run
+      },
+      entries: viewEntries,
+      stats
+    };
+  }
+
+  private calculateStats(entries: ParsedLogEntry[]): LogStatsViewModel {
+    const stats: LogStatsViewModel = {
+      totalEntries: entries.length,
+      assistantCount: 0,
+      userCount: 0,
+      systemCount: 0,
+      errorCount: 0
+    };
+
+    entries.forEach(entry => {
+      switch (entry.status) {
+        case 'assistant':
+          stats.assistantCount += 1;
+          break;
+        case 'user':
+          stats.userCount += 1;
+          break;
+        case 'system':
+          stats.systemCount += 1;
+          break;
+        case 'error':
+          stats.errorCount += 1;
+          break;
+        default:
+          break;
+      }
+    });
+
+    return stats;
+  }
+
+  private getRelativePath(filePath: string): string {
+    const relative = path.relative(this.workspaceRoot, filePath);
+    return relative.startsWith('..') ? filePath : relative;
+  }
+
+  private async openLogFile(logFile: string): Promise<void> {
+    try {
+      const document = await vscode.workspace.openTextDocument(logFile);
+      await vscode.window.showTextDocument(document, { preview: false });
+    } catch (error) {
+      vscode.window.showErrorMessage(
+        `Failed to open log file: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  private async openSourceFile(sourceFile?: string): Promise<void> {
+    if (!sourceFile) {
+      vscode.window.showWarningMessage('No source file is associated with this execution.');
+      return;
+    }
+
+    if (!fs.existsSync(sourceFile)) {
+      vscode.window.showWarningMessage('Source file no longer exists on disk.');
+      return;
+    }
+
+    try {
+      const document = await vscode.workspace.openTextDocument(sourceFile);
+      await vscode.window.showTextDocument(document, { preview: false });
+    } catch (error) {
+      vscode.window.showErrorMessage(
+        `Failed to open source file: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  private getHtml(webview: vscode.Webview): string {
+    const scriptUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, 'dist', 'webviews', 'log.js')
+    );
+    const nonce = this.generateNonce();
+    const csp = [
+      `default-src 'none';`,
+      `img-src ${webview.cspSource} https:;`,
+      `script-src 'nonce-${nonce}';`,
+      `style-src ${webview.cspSource} 'unsafe-inline';`,
+      `font-src ${webview.cspSource} https:;`
+    ].join(' ');
+
+    return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="${csp}" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Jarvis Log</title>
+    <style>
+      body {
+        padding: 0;
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      }
+      #root {
+        height: 100vh;
+        width: 100vw;
+        background: var(--vscode-editor-background);
+        color: var(--vscode-foreground);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script nonce="${nonce}" src="${scriptUri}"></script>
+  </body>
+</html>`;
+  }
+
+  private parseLogFile(logFile: string): ParsedLogEntry[] {
+    const raw = fs.readFileSync(logFile, 'utf8');
+    if (!raw.trim()) {
+      return [];
+    }
+
+    const lines = raw
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(line => line.length > 0);
+
+    return lines.map((line, index) => this.parseLine(line, index));
   }
 
   private parseLine(line: string, index: number): ParsedLogEntry {
@@ -228,13 +492,17 @@ export class LogViewer implements vscode.TextDocumentContentProvider, vscode.Dis
     };
   }
 
-  private extractPayloadSegments(message: ClaudeJsonMessage): PayloadSegment[] {
-    const segments: PayloadSegment[] = [];
+  private extractPayloadSegments(message: ClaudeJsonMessage): LogPayloadSegment[] {
+    const segments: LogPayloadSegment[] = [];
 
     const append = (text: string | undefined, isCode = false) => {
       if (text && text.trim().length > 0) {
         segments.push({ text: text.trim(), isCode });
       }
+    };
+
+    const formatMcpServers = (servers: {name: string, status: string}[]): string => {
+      return servers.map(server => `${server.name} (${server.status})`).join(' | ');
     };
 
     switch (message.type) {
@@ -252,7 +520,7 @@ export class LogViewer implements vscode.TextDocumentContentProvider, vscode.Dis
             append(rendered, true);
           } else if (item.type === 'tool_result') {
             const rendered = item.content ? JSON.stringify(item.content, null, 2) : undefined;
-            append(`Tool result`, false);
+            append('Tool result');
             append(rendered, true);
           }
         });
@@ -264,13 +532,25 @@ export class LogViewer implements vscode.TextDocumentContentProvider, vscode.Dis
             if (typeof entry === 'string') {
               append(entry);
             } else if (entry && typeof entry === 'object' && 'text' in entry) {
-              append(String(entry.text));
+              append(String((entry as any).text));
             } else {
               append(JSON.stringify(entry, null, 2), true);
             }
           });
         } else if (typeof message.content === 'string') {
           append(message.content);
+        }
+
+        if (message.tools) {
+          append(`Tools: ${message.tools.length}`);
+        }
+
+        if (message.model) {
+          append(`Model: ${message.model}`);
+        }
+
+        if (message.mcp_servers) {
+          append(`MCP Servers: ${formatMcpServers(message.mcp_servers)}`);
         }
         break;
       case 'result':
@@ -323,7 +603,7 @@ export class LogViewer implements vscode.TextDocumentContentProvider, vscode.Dis
       case 'error':
         return '❗ Error';
       default:
-        return message.type;
+        return String(message.type);
     }
   }
 
@@ -334,79 +614,6 @@ export class LogViewer implements vscode.TextDocumentContentProvider, vscode.Dis
       .sort((a, b) => a.getTime() - b.getTime());
 
     return timestamps[0];
-  }
-
-  private renderCard(entry: ParsedLogEntry, baseline?: Date, previous?: Date): string {
-    const lines: string[] = [];
-    lines.push(`╭─ ${entry.badge}`);
-
-    const metaParts: string[] = [];
-    const timestampText = entry.timestamp
-      ? entry.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-      : `Line ${entry.index + 1}`;
-    metaParts.push(`Time: ${timestampText}`);
-
-    if (entry.timestamp && baseline) {
-      const delta = this.formatDuration(entry.timestamp.getTime() - baseline.getTime());
-      if (delta) {
-        metaParts.push(`T+${delta}`);
-      }
-    }
-
-    if (entry.timestamp && previous && previous !== entry.timestamp) {
-      const step = this.formatDuration(entry.timestamp.getTime() - previous.getTime());
-      if (step) {
-        metaParts.push(`Δ${step}`);
-      }
-    }
-
-    if (entry.tokens !== undefined) {
-      metaParts.push(`Tokens: ${entry.tokens}`);
-    }
-
-    metaParts.push(`Status: ${entry.status}`);
-
-    lines.push(`│ ${metaParts.join(' • ')}`);
-    lines.push('├────────────────────────────────────────────────────');
-
-    entry.payload.forEach((segment, segmentIndex) => {
-      if (segmentIndex > 0) {
-        lines.push('│');
-      }
-      const rendered = segment.isCode ? this.renderCodeBlock(segment.text) : this.renderTextBlock(segment.text);
-      rendered.forEach(line => lines.push(`│ ${line}`));
-    });
-
-    lines.push('╰────────────────────────────────────────────────────');
-    return lines.join('\n');
-  }
-
-  private renderTextBlock(text: string): string[] {
-    return text.split(/\r?\n/);
-  }
-
-  private renderCodeBlock(text: string): string[] {
-    const lines = text.split(/\r?\n/);
-    return ['```json', ...lines, '```'];
-  }
-
-  private formatDuration(milliseconds: number): string | undefined {
-    if (!Number.isFinite(milliseconds)) {
-      return undefined;
-    }
-    const ms = Math.max(0, milliseconds);
-    const secondsTotal = Math.floor(ms / 1000);
-    const seconds = secondsTotal % 60;
-    const minutes = Math.floor(secondsTotal / 60) % 60;
-    const hours = Math.floor(secondsTotal / 3600);
-
-    if (hours > 0) {
-      return `${hours}h ${minutes}m ${seconds}s`;
-    }
-    if (minutes > 0) {
-      return `${minutes}m ${seconds}s`;
-    }
-    return `${seconds}s`;
   }
 
   private parseTimestamp(raw?: string): Date | undefined {
@@ -445,107 +652,16 @@ export class LogViewer implements vscode.TextDocumentContentProvider, vscode.Dis
     }
   }
 
-  private ensureWatcher(key: string, uri: vscode.Uri, logFile: string): void {
-    this.disposeWatcher(key);
-
-    const directory = path.dirname(logFile);
-    if (!fs.existsSync(directory)) {
-      fs.mkdirSync(directory, { recursive: true });
-    }
-
-    // Create the log file if it doesn't exist
-    if (!fs.existsSync(logFile)) {
-      fs.writeFileSync(logFile, '', 'utf8');
-    }
-
-    try {
-      // Watch the specific log file for changes
-      const watcher = fs.watch(logFile, { persistent: true }, (eventType) => {
-        // Trigger update on any change to the file
-        if (eventType === 'change') {
-          // Small debounce to avoid multiple rapid updates
-          setTimeout(() => {
-            this.onDidChangeEmitter.fire(uri);
-          }, 100);
-        }
-      });
-
-      this.watchers.set(key, watcher);
-
-      // Also set up an interval to check for updates in case file watching fails
-      const intervalId = setInterval(() => {
-        if (fs.existsSync(logFile)) {
-          this.onDidChangeEmitter.fire(uri);
-        }
-      }, 500);
-
-      // Store the interval ID so we can clear it later
-      (watcher as any).__intervalId = intervalId;
-    } catch (error) {
-      console.error('Failed to watch log file', error);
-
-      // Fallback to polling if watching fails
-      const intervalId = setInterval(() => {
-        if (fs.existsSync(logFile)) {
-          this.onDidChangeEmitter.fire(uri);
-        }
-      }, 500);
-
-      // Create a dummy watcher object to store the interval
-      const dummyWatcher = {
-        close: () => clearInterval(intervalId),
-        __intervalId: intervalId
-      } as any;
-
-      this.watchers.set(key, dummyWatcher);
-    }
-  }
-
-  private disposeWatcher(key: string): void {
-    const watcher = this.watchers.get(key);
-    if (watcher) {
-      // Clear any associated interval timer
-      if ((watcher as any).__intervalId) {
-        clearInterval((watcher as any).__intervalId);
-      }
-      watcher.close();
-      this.watchers.delete(key);
-    }
-  }
-
-  private createUri(context: LogContext, key: string): vscode.Uri {
-    const slug = this.slugify(`${context.type}-${context.title || context.id}`);
-    return vscode.Uri.from({
-      scheme: LogViewer.scheme,
-      authority: context.type,
-      path: `/${slug || key}.log`,
-      query: encodeURIComponent(key)
-    });
-  }
-
   private getKey(type: LogType, id: string): string {
     return `${type}:${id}`;
   }
 
-  private getKeyFromUri(uri: vscode.Uri): string {
-    if (uri.query) {
-      try {
-        return decodeURIComponent(uri.query);
-      } catch (error) {
-        // Fall through to rebuild
-      }
+  private generateNonce(): string {
+    const charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let result = '';
+    for (let i = 0; i < 32; i++) {
+      result += charset.charAt(Math.floor(Math.random() * charset.length));
     }
-
-    const idFromPath = uri.path.split('/').filter(Boolean).shift() || '';
-    const decodedId = decodeURIComponent(idFromPath);
-    return this.getKey(uri.authority as LogType, decodedId);
-  }
-
-  private slugify(value: string): string {
-    return value
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 50);
+    return result;
   }
 }

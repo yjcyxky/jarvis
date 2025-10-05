@@ -68,6 +68,9 @@ export interface ClaudeJsonMessage {
   result?: string;
   error?: string;
   timestamp?: string;
+  tools?: string[];
+  model?: string;
+  mcp_servers?: {name: string, status: string}[];
 }
 
 export interface JarvisConfig {

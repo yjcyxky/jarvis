@@ -33,7 +33,7 @@ export function activate(context: vscode.ExtensionContext) {
   logger.info('Extension', `Workspace root: ${workspaceRoot}`);
 
   // Initialize log viewer and managers
-  logViewer = new LogViewer(workspaceRoot);
+  logViewer = new LogViewer(context.extensionUri, workspaceRoot);
   context.subscriptions.push(logViewer);
 
   historyStore = new HistoryStore(workspaceRoot);
@@ -43,7 +43,13 @@ export function activate(context: vscode.ExtensionContext) {
   todoManager = new TodoManager(workspaceRoot, logViewer, historyStore);
 
   // Initialize history viewer
-  historyViewer = HistoryViewer.register(context, agentManager, todoManager);
+  historyViewer = new HistoryViewer(
+    context.extensionUri,
+    agentManager,
+    todoManager,
+    logViewer
+  );
+  context.subscriptions.push(historyViewer);
 
   logger.info('Extension', 'Managers initialized');
 

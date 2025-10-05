@@ -1,242 +1,368 @@
-import * as vscode from 'vscode';
 import * as fs from 'fs';
-import * as path from 'path';
-import { ExecutionHistoryEntry } from './historyStore';
+import * as vscode from 'vscode';
+import type { ExecutionHistoryEntry } from './historyStore';
 import { AgentManager } from '../executors/agentManager';
 import { TodoManager } from '../executors/todoManager';
 import { Logger } from './logger';
+import { LogViewer } from './logViewer';
+import type {
+  HistoryDataPayload,
+  HistoryEntryViewModel,
+  HistoryFromWebviewMessage,
+  HistorySummaryViewModel,
+  HistoryToWebviewMessage
+} from '../webviews/shared/historyMessages';
 
-interface HistoryViewerOptions {
+export interface HistoryViewerOptions {
   type: 'agent' | 'todo' | 'all';
   targetId?: string;
   title: string;
 }
 
-export class HistoryViewer implements vscode.TextDocumentContentProvider {
-  private static readonly scheme = 'jarvis-history';
-  private readonly onDidChangeEmitter = new vscode.EventEmitter<vscode.Uri>();
-  readonly onDidChange = this.onDidChangeEmitter.event;
-  private activeViews = new Map<string, HistoryViewerOptions>();
-  private logger: Logger;
+interface HistoryPanelState {
+  panel: vscode.WebviewPanel;
+  options: HistoryViewerOptions;
+  ready: boolean;
+  pendingMessages: HistoryToWebviewMessage[];
+}
+
+export class HistoryViewer implements vscode.Disposable {
+  private readonly panels = new Map<string, HistoryPanelState>();
+  private readonly disposables: vscode.Disposable[] = [];
+  private readonly logger = Logger.getInstance();
 
   constructor(
-    private agentManager: AgentManager,
-    private todoManager: TodoManager
+    private readonly extensionUri: vscode.Uri,
+    private readonly agentManager: AgentManager,
+    private readonly todoManager: TodoManager,
+    private readonly logViewer: LogViewer
   ) {
-    this.logger = Logger.getInstance();
+    this.disposables.push(
+      this.agentManager.onDidChange(() => this.refreshAll()),
+      this.todoManager.onDidChange(() => this.refreshAll())
+    );
   }
 
-  provideTextDocumentContent(uri: vscode.Uri): string {
-    const viewId = uri.authority || uri.path.replace(/^\//, '');
-    const options = this.activeViews.get(viewId);
+  dispose(): void {
+    this.disposables.forEach(d => d.dispose());
+    this.panels.forEach(state => state.panel.dispose());
+    this.panels.clear();
+  }
 
-    if (!options) {
-      return '# No history data available';
+  async openHistoryView(options: HistoryViewerOptions): Promise<void> {
+    const key = this.getViewKey(options);
+    const existing = this.panels.get(key);
+
+    if (existing) {
+      existing.options = options;
+      existing.panel.title = options.title;
+      existing.panel.reveal(vscode.ViewColumn.Active, false);
+      this.postData(existing);
+      return;
     }
 
-    this.logger.info("HistoryViewer", `Providing history content for: ${options.type}/${options.targetId || 'all'}`);
+    const panel = vscode.window.createWebviewPanel(
+      'jarvisHistory',
+      options.title,
+      { viewColumn: vscode.ViewColumn.Active, preserveFocus: false },
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'dist', 'webviews')]
+      }
+    );
 
-    // Gather history entries
+    const state: HistoryPanelState = {
+      panel,
+      options,
+      ready: false,
+      pendingMessages: []
+    };
+
+    this.panels.set(key, state);
+
+    panel.iconPath = vscode.Uri.joinPath(this.extensionUri, 'resources', 'jarvis-icon.png');
+
+    panel.onDidDispose(() => {
+      this.panels.delete(key);
+    });
+
+    panel.webview.onDidReceiveMessage(async (message: HistoryFromWebviewMessage) => {
+      switch (message.type) {
+        case 'ready':
+          state.ready = true;
+          this.flushPendingMessages(state);
+          break;
+        case 'refresh':
+          this.postData(state);
+          break;
+        case 'openLog':
+          await this.handleOpenLog(state, message.payload.entryId);
+          break;
+        case 'openSource':
+          await this.handleOpenSource(state, message.payload.entryId);
+          break;
+        default:
+          this.logger.warn('HistoryViewer', `Received unknown message: ${JSON.stringify(message)}`);
+      }
+    });
+
+    panel.webview.html = this.getHtml(panel.webview);
+    this.postData(state);
+  }
+
+  private refreshAll(): void {
+    this.panels.forEach(state => this.postData(state));
+  }
+
+  private getViewKey(options: HistoryViewerOptions): string {
+    return `${options.type}:${options.targetId ?? 'all'}`;
+  }
+
+  private postData(state: HistoryPanelState): void {
+    try {
+      const payload = this.buildViewModel(state.options);
+      this.enqueueMessage(state, { type: 'historyData', payload });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.enqueueMessage(state, { type: 'showError', payload: { message } });
+    }
+  }
+
+  private enqueueMessage(state: HistoryPanelState, message: HistoryToWebviewMessage): void {
+    if (state.ready) {
+      state.panel.webview.postMessage(message).then(undefined, (err: any) => {
+        this.logger.error('HistoryViewer', 'Failed to post message to webview', err);
+      });
+    } else {
+      state.pendingMessages.push(message);
+    }
+  }
+
+  private flushPendingMessages(state: HistoryPanelState): void {
+    if (!state.ready) {
+      return;
+    }
+
+    while (state.pendingMessages.length > 0) {
+      const message = state.pendingMessages.shift();
+      if (message) {
+        state.panel.webview.postMessage(message).then(undefined, (err: any) => {
+          this.logger.error('HistoryViewer', 'Failed to post queued message', err);
+        });
+      }
+    }
+  }
+
+  private buildViewModel(options: HistoryViewerOptions): HistoryDataPayload {
+    const entries = this.getEntries(options);
+
+    const viewEntries: HistoryEntryViewModel[] = entries.map(entry => ({
+      id: entry.id,
+      type: entry.type,
+      targetId: entry.targetId,
+      label: entry.label,
+      status: entry.status,
+      startTime: entry.startTime,
+      endTime: entry.endTime,
+      durationMs: this.calculateDuration(entry),
+      sourceFile: entry.sourceFile,
+      logFile: entry.logFile,
+      versionHash: entry.versionHash,
+      metadata: entry.metadata
+    }));
+
+    const summary = this.calculateSummary(viewEntries);
+
+    return {
+      title: options.title,
+      filter: { type: options.type, targetId: options.targetId },
+      entries: viewEntries,
+      summary
+    };
+  }
+
+  private getEntries(options: HistoryViewerOptions): ExecutionHistoryEntry[] {
     let entries: ExecutionHistoryEntry[] = [];
 
     if (options.type === 'agent') {
-      if (options.targetId) {
-        entries = this.agentManager.getHistory(options.targetId);
-      } else {
-        entries = this.agentManager.getAllHistory();
-      }
+      entries = options.targetId
+        ? this.agentManager.getHistory(options.targetId)
+        : this.agentManager.getAllHistory();
     } else if (options.type === 'todo') {
-      if (options.targetId) {
-        entries = this.todoManager.getHistory(options.targetId);
-      } else {
-        entries = this.todoManager.getAllHistory();
-      }
+      entries = options.targetId
+        ? this.todoManager.getHistory(options.targetId)
+        : this.todoManager.getAllHistory();
     } else {
-      // Show all history
       entries = [
         ...this.agentManager.getAllHistory(),
         ...this.todoManager.getAllHistory()
       ];
     }
 
-    // Sort by start time descending
-    entries.sort((a, b) =>
+    return entries.sort((a, b) =>
       new Date(b.startTime).getTime() - new Date(a.startTime).getTime()
     );
-
-    return this.formatHistoryAsMarkdown(options.title, entries);
   }
 
-  private formatHistoryAsMarkdown(title: string, entries: ExecutionHistoryEntry[]): string {
-    const lines: string[] = [];
-
-    lines.push(`# ${title}`);
-    lines.push('');
-    lines.push(`*Total Executions: ${entries.length}*`);
-    lines.push('');
-
-    if (entries.length === 0) {
-      lines.push('No execution history available.');
-      return lines.join('\n');
-    }
-
-    // Create table header
-    lines.push('| Time | Type | Name | Status | Duration | Source | Log | Version |');
-    lines.push('|------|------|------|--------|----------|--------|-----|---------|');
-
-    // Add table rows
-    for (const entry of entries) {
-      const startTime = new Date(entry.startTime);
-      const timeStr = this.formatDateTime(startTime);
-      const typeIcon = entry.type === 'agent' ? '🤖' : '✅';
-      const statusIcon = this.getStatusIcon(entry.status);
-      const duration = this.calculateDuration(entry);
-
-      // Create clickable links for source and log files
-      const sourceName = entry.sourceFile ? path.basename(entry.sourceFile) : '-';
-      const sourceLink = entry.sourceFile && fs.existsSync(entry.sourceFile)
-        ? `[${sourceName}](command:vscode.open?${encodeURIComponent(JSON.stringify([vscode.Uri.file(entry.sourceFile)]))})`
-        : sourceName;
-
-      const logName = entry.logFile ? path.basename(entry.logFile) : '-';
-      const logLink = entry.logFile && fs.existsSync(entry.logFile)
-        ? `[${logName}](command:jarvis.openLog?${encodeURIComponent(JSON.stringify([entry.type, entry.targetId, entry.logFile]))})`
-        : logName;
-
-      const versionShort = entry.versionHash ? entry.versionHash.substring(0, 8) : '-';
-
-      lines.push(`| ${timeStr} | ${typeIcon} ${entry.type} | ${entry.label} | ${statusIcon} ${entry.status} | ${duration} | ${sourceLink} | ${logLink} | ${versionShort} |`);
-    }
-
-    lines.push('');
-    lines.push('---');
-    lines.push('');
-    lines.push('## Legend');
-    lines.push('- 🤖 Agent execution');
-    lines.push('- ✅ TODO execution');
-    lines.push('- ✅ Success');
-    lines.push('- ❌ Failed');
-    lines.push('- ⏸️ Stopped');
-    lines.push('- ⏳ Running');
-    lines.push('');
-    lines.push('*Click on source files to open them, click on log files to view execution logs.*');
-
-    return lines.join('\n');
-  }
-
-  private formatDateTime(date: Date): string {
-    const pad = (n: number) => n.toString().padStart(2, '0');
-    const month = pad(date.getMonth() + 1);
-    const day = pad(date.getDate());
-    const hours = pad(date.getHours());
-    const minutes = pad(date.getMinutes());
-    const seconds = pad(date.getSeconds());
-
-    return `${month}/${day} ${hours}:${minutes}:${seconds}`;
-  }
-
-  private getStatusIcon(status: string): string {
-    switch (status) {
-      case 'success': return '✅';
-      case 'failed': return '❌';
-      case 'stopped': return '⏸️';
-      case 'running': return '⏳';
-      default: return '❓';
-    }
-  }
-
-  private calculateDuration(entry: ExecutionHistoryEntry): string {
+  private calculateDuration(entry: ExecutionHistoryEntry): number | undefined {
     if (!entry.endTime) {
-      if (entry.status === 'running') {
-        const duration = Date.now() - new Date(entry.startTime).getTime();
-        return this.formatDuration(duration);
+      return undefined;
+    }
+    const start = new Date(entry.startTime).getTime();
+    const end = new Date(entry.endTime).getTime();
+    if (Number.isNaN(start) || Number.isNaN(end)) {
+      return undefined;
+    }
+    return Math.max(0, end - start);
+  }
+
+  private calculateSummary(entries: HistoryEntryViewModel[]): HistorySummaryViewModel {
+    const summary: HistorySummaryViewModel = {
+      total: entries.length,
+      running: 0,
+      success: 0,
+      failed: 0,
+      stopped: 0,
+      paused: 0,
+      lastRun: undefined as string | undefined
+    };
+
+    let latestTimestamp = 0;
+
+    entries.forEach(entry => {
+      switch (entry.status) {
+        case 'running':
+          summary.running += 1;
+          break;
+        case 'success':
+          summary.success += 1;
+          break;
+        case 'failed':
+          summary.failed += 1;
+          break;
+        case 'stopped':
+          summary.stopped += 1;
+          break;
+        case 'paused':
+          summary.paused += 1;
+          break;
+        default:
+          break;
       }
-      return '-';
-    }
 
-    const duration = new Date(entry.endTime).getTime() - new Date(entry.startTime).getTime();
-    return this.formatDuration(duration);
-  }
-
-  private formatDuration(ms: number): string {
-    const seconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const hours = Math.floor(minutes / 60);
-
-    if (hours > 0) {
-      return `${hours}h ${minutes % 60}m`;
-    } else if (minutes > 0) {
-      return `${minutes}m ${seconds % 60}s`;
-    } else {
-      return `${seconds}s`;
-    }
-  }
-
-  async openHistoryView(options: HistoryViewerOptions): Promise<void> {
-    const viewId = `${options.type}-${options.targetId || 'all'}-${Date.now()}`;
-    const uri = vscode.Uri.parse(`${HistoryViewer.scheme}://${viewId}`);
-
-    this.activeViews.set(viewId, options);
-
-    const doc = await vscode.workspace.openTextDocument(uri);
-    await vscode.window.showTextDocument(doc, {
-      preview: false,
-      preserveFocus: false,
-      viewColumn: vscode.ViewColumn.One
+      const candidate = entry.endTime ?? entry.startTime;
+      const timestamp = new Date(candidate).getTime();
+      if (!Number.isNaN(timestamp) && timestamp > latestTimestamp) {
+        latestTimestamp = timestamp;
+      }
     });
 
-    // Set up auto-refresh
-    const refreshInterval = setInterval(() => {
-      if (!this.activeViews.has(viewId)) {
-        clearInterval(refreshInterval);
-        return;
-      }
+    if (latestTimestamp > 0) {
+      summary.lastRun = new Date(latestTimestamp).toISOString();
+    }
 
-      // Check if the document is still open
-      const isOpen = vscode.window.visibleTextEditors.some(
-        editor => editor.document.uri.toString() === uri.toString()
+    return summary;
+  }
+
+  private async handleOpenLog(state: HistoryPanelState, entryId: string): Promise<void> {
+    const entry = this.getEntries(state.options).find(item => item.id === entryId);
+    if (!entry) {
+      vscode.window.showWarningMessage('History entry no longer available.');
+      return;
+    }
+
+    const timestamp = new Date(entry.startTime);
+    const titleSuffix = Number.isNaN(timestamp.getTime())
+      ? ''
+      : ` (${timestamp.toLocaleString()})`;
+    const panelTitle = `${entry.label}${titleSuffix}`;
+
+    await this.logViewer.openLog({
+      type: entry.type,
+      id: entry.targetId,
+      title: panelTitle,
+      logFile: entry.logFile,
+      run: {
+        status: entry.status,
+        startTime: entry.startTime,
+        endTime: entry.endTime,
+        versionHash: entry.versionHash,
+        sourceFile: entry.sourceFile
+      }
+    });
+  }
+
+  private async handleOpenSource(state: HistoryPanelState, entryId: string): Promise<void> {
+    const entry = this.getEntries(state.options).find(item => item.id === entryId);
+    if (!entry || !entry.sourceFile) {
+      vscode.window.showWarningMessage('Source file is not available for this entry.');
+      return;
+    }
+
+    if (!fs.existsSync(entry.sourceFile)) {
+      vscode.window.showWarningMessage('Source file no longer exists on disk.');
+      return;
+    }
+
+    try {
+      const document = await vscode.workspace.openTextDocument(entry.sourceFile);
+      const uri = document.uri;
+      await vscode.window.showTextDocument(uri, { preview: false });
+    } catch (error) {
+      vscode.window.showErrorMessage(
+        `Failed to open source file: ${error instanceof Error ? error.message : String(error)}`
       );
+    }
+  }
 
-      if (!isOpen) {
-        this.activeViews.delete(viewId);
-        clearInterval(refreshInterval);
-        return;
+  private getHtml(webview: vscode.Webview): string {
+    const scriptUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, 'dist', 'webviews', 'history.js')
+    );
+    const nonce = this.generateNonce();
+    const csp = [
+      `default-src 'none';`,
+      `img-src ${webview.cspSource} https:;`,
+      `script-src 'nonce-${nonce}';`,
+      `style-src ${webview.cspSource} 'unsafe-inline';`,
+      `font-src ${webview.cspSource} https:;`
+    ].join(' ');
+
+    return `<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="${csp}" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Jarvis History</title>
+    <style>
+      body {
+        padding: 0;
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       }
-
-      this.onDidChangeEmitter.fire(uri);
-    }, 5000); // Refresh every 5 seconds
-
-    this.logger.info("HistoryViewer", `Opened history view: ${options.title}`);
+      #root {
+        height: 100vh;
+        width: 100vw;
+        background: var(--vscode-editor-background);
+        color: var(--vscode-foreground);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script nonce="${nonce}" src="${scriptUri}"></script>
+  </body>
+</html>`;
   }
 
-  dispose(): void {
-    this.activeViews.clear();
-    this.onDidChangeEmitter.dispose();
-  }
-
-  static register(context: vscode.ExtensionContext, agentManager: AgentManager, todoManager: TodoManager): HistoryViewer {
-    const viewer = new HistoryViewer(agentManager, todoManager);
-
-    const provider = vscode.workspace.registerTextDocumentContentProvider(
-      HistoryViewer.scheme,
-      viewer
-    );
-
-    context.subscriptions.push(provider);
-
-    // Register command to open log files from history view
-    context.subscriptions.push(
-      vscode.commands.registerCommand('jarvis.openLog', async (type: string, targetId: string, logFile: string) => {
-        if (!logFile || !fs.existsSync(logFile)) {
-          vscode.window.showWarningMessage('Log file not found');
-          return;
-        }
-
-        const uri = vscode.Uri.file(logFile);
-        await vscode.window.showTextDocument(uri);
-      })
-    );
-
-    return viewer;
+  private generateNonce(): string {
+    const charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let result = '';
+    for (let i = 0; i < 32; i++) {
+      result += charset.charAt(Math.floor(Math.random() * charset.length));
+    }
+    return result;
   }
 }

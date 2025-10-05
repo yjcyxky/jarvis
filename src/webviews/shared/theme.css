@@ -1,0 +1,107 @@
+:root {
+  color-scheme: light dark;
+}
+
+body {
+  background-color: var(--vscode-editor-background);
+  color: var(--vscode-foreground);
+}
+
+#root {
+  color: inherit;
+}
+
+.ant-card,
+.ant-card .ant-card-head,
+.ant-card .ant-card-body {
+  background-color: var(--vscode-editorWidget-background) !important;
+  color: var(--vscode-foreground) !important;
+}
+
+.ant-card {
+  border-color: var(--vscode-editorWidget-border) !important;
+}
+
+.ant-card .ant-card-head {
+  border-bottom-color: var(--vscode-editorWidget-border) !important;
+}
+
+.ant-statistic-title,
+.ant-statistic-content-value,
+.ant-statistic-content-suffix,
+.ant-statistic-content-prefix {
+  color: var(--vscode-foreground) !important;
+}
+
+.ant-table,
+.ant-table-container,
+.ant-table-thead > tr > th,
+.ant-table-tbody > tr > td {
+  background-color: var(--vscode-editorWidget-background) !important;
+  color: var(--vscode-foreground) !important;
+  border-color: var(--vscode-editorWidget-border) !important;
+}
+
+.ant-table-tbody > tr.ant-table-row:hover > td {
+  background-color: var(--vscode-list-hoverBackground) !important;
+}
+
+.ant-table-tbody > tr.ant-table-row-selected > td {
+  background-color: var(--vscode-list-activeSelectionBackground) !important;
+}
+
+.ant-table-footer,
+.ant-table-title {
+  background-color: var(--vscode-editorWidget-background) !important;
+  color: var(--vscode-foreground) !important;
+}
+
+.ant-btn,
+.ant-btn:active,
+.ant-btn:focus {
+  background-color: var(--vscode-button-background, #1677ff) !important;
+  color: var(--vscode-button-foreground, #fff) !important;
+  border-color: var(--vscode-button-border, #1677ff) !important;
+}
+
+.ant-btn:hover {
+  background-color: var(--vscode-button-hoverBackground, #4096ff) !important;
+  color: var(--vscode-button-foreground, #fff) !important;
+}
+
+.ant-tag {
+  color: inherit;
+}
+
+.ant-timeline-item-label,
+.ant-typography,
+.ant-alert-message,
+.ant-alert-description {
+  color: var(--vscode-foreground) !important;
+}
+
+.jarvis-timeline-row {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 16px;
+  align-items: flex-start;
+  width: 100%;
+}
+
+.jarvis-timeline-time {
+  text-align: right;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  line-height: 1.5;
+  padding-right: 12px;
+  min-width: 90px;
+}
+
+.jarvis-timeline-content {
+  width: 100%;
+  max-width: 100%;
+}
+
+.jarvis-timeline-content .ant-card {
+  width: 100%;
+}
