@@ -302,8 +302,8 @@ MIT 许可证 - 详见 LICENSE 文件
 
 ## 支持
 
-- **问题反馈**：[GitHub Issues](https://github.com/your-org/jarvis-vscode/issues)
-- **文档**：[Wiki](https://github.com/your-org/jarvis-vscode/wiki)
+- **问题反馈**：[GitHub Issues](https://github.com/yjcyxky/jarvis/issues)
+- **文档**：[Wiki](https://github.com/yjcyxky/jarvis/wiki)
 - **🆕 自动执行指南**：[docs/agent-auto-execute-guide.md](docs/agent-auto-execute-guide.md)
 - **🆕 快速参考**：[docs/agent-auto-execute-quick-reference.md](docs/agent-auto-execute-quick-reference.md)
 - **🆕 常见问题**：[docs/agent-auto-execute-faq.md](docs/agent-auto-execute-faq.md)

@@ -304,8 +304,8 @@ MIT License - see LICENSE file for details
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/your-org/jarvis-vscode/issues)
-- **Documentation**: [Wiki](https://github.com/your-org/jarvis-vscode/wiki)
+- **Issues**: [GitHub Issues](https://github.com/yjcyxky/jarvis/issues)
+- **Documentation**: [Wiki](https://github.com/yjcyxky/jarvis/wiki)
 - **🆕 Auto-Execute Guide**: [docs/agent-auto-execute-guide.md](docs/agent-auto-execute-guide.md)
 - **🆕 Quick Reference**: [docs/agent-auto-execute-quick-reference.md](docs/agent-auto-execute-quick-reference.md)
 - **🆕 FAQ**: [docs/agent-auto-execute-faq.md](docs/agent-auto-execute-faq.md)
