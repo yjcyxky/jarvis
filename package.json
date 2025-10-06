@@ -2,7 +2,7 @@
   "name": "openjarvis",
   "displayName": "Jarvis - AI Agent Manager",
   "description": "Manage and execute AI-based agents with Claude Code integration",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "OpenProphetDB",
   "icon": "resources/jarvis-icon.png",
   "engines": {

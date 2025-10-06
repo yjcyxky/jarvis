@@ -15,6 +15,7 @@ export class AgentManager {
   private logger: Logger;
   private executor: ClaudeCodeExecutor;
   private watcher?: vscode.FileSystemWatcher;
+  private logWatcher?: vscode.FileSystemWatcher;
   private readonly agentSources: Map<string, string> = new Map();
   private changeVersion = 0;
   private readonly _onDidChange = new vscode.EventEmitter<void>();
@@ -200,6 +201,21 @@ export class AgentManager {
       this.lastFileChangeTime = new Date();
       this.loadAgents();
       this.autoExecuteIfConfigured();
+    });
+
+    const logDir = this.getLogDir();
+    const logPattern = new vscode.RelativePattern(logDir, '**/*.jsonl');
+
+    this.logWatcher = vscode.workspace.createFileSystemWatcher(logPattern);
+
+    this.logWatcher.onDidCreate(() => {
+      this.syncLogFiles();
+    });
+    this.logWatcher.onDidChange(() => {
+      this.syncLogFiles();
+    });
+    this.logWatcher.onDidDelete(() => {
+      this.syncLogFiles();
     });
   }
 
@@ -526,6 +542,7 @@ export class AgentManager {
 
   refresh(): void {
     this.loadAgents();
+    this.syncLogFiles();
   }
 
   async triggerAutoExecute(): Promise<void> {
@@ -604,6 +621,7 @@ export class AgentManager {
   dispose(): void {
     this.stopAllAgents();
     this.watcher?.dispose();
+    this.logWatcher?.dispose();
     this.executor.dispose();
     this._onDidChange.dispose();
   }

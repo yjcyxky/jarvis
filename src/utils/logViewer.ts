@@ -224,6 +224,8 @@ export class LogViewer implements vscode.Disposable {
 
     try {
       const watcher = fs.watch(context.logFile, { persistent: true }, eventType => {
+        this.logger.info('LogViewer', `Log file event: ${eventType} ${context.logFile}`);
+
         if (eventType === 'change') {
           this.scheduleUpdate(key);
         } else if (eventType === 'rename') {

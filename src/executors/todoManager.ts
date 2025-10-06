@@ -11,6 +11,7 @@ export class TodoManager {
   private todos: Map<string, TodoItem[]> = new Map();
   private executor: ClaudeCodeExecutor;
   private watcher?: vscode.FileSystemWatcher;
+  private logWatcher?: vscode.FileSystemWatcher;
   private executions: Map<string, TodoExecution> = new Map();
   private changeVersion = 0;
   private readonly _onDidChange = new vscode.EventEmitter<void>();
@@ -48,6 +49,21 @@ export class TodoManager {
     this.watcher.onDidCreate(() => this.loadTodos());
     this.watcher.onDidChange(() => this.loadTodos());
     this.watcher.onDidDelete(() => this.loadTodos());
+
+    const todoLogDir = this.getTodoLogDir();
+    const todoLogPattern = new vscode.RelativePattern(todoLogDir, '**/*.jsonl');
+
+    this.logWatcher = vscode.workspace.createFileSystemWatcher(todoLogPattern);
+
+    this.logWatcher.onDidCreate(() => {
+      this.syncLogFiles();
+    });
+    this.logWatcher.onDidChange(() => {
+      this.syncLogFiles();
+    });
+    this.logWatcher.onDidDelete(() => {
+      this.syncLogFiles();
+    });
   }
 
   private loadTodos(): void {
@@ -439,6 +455,7 @@ export class TodoManager {
   }
 
   refresh(): void {
+    this.syncLogFiles();
     this.loadTodos();
   }
 
@@ -455,6 +472,7 @@ export class TodoManager {
 
   dispose(): void {
     this.watcher?.dispose();
+    this.logWatcher?.dispose();
     this.executor.dispose();
     this._onDidChange.dispose();
   }
