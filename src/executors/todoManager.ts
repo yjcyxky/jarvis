@@ -442,6 +442,17 @@ export class TodoManager {
     this.loadTodos();
   }
 
+  /**
+   * 同步日志文件状态，清理无效的历史记录
+   */
+  syncLogFiles(): void {
+    const removedCount = this.historyStore.cleanupInvalidRecords();
+    if (removedCount > 0) {
+      console.log(`TodoManager: Cleaned up ${removedCount} invalid history records`);
+      this.markChanged();
+    }
+  }
+
   dispose(): void {
     this.watcher?.dispose();
     this.executor.dispose();

@@ -32,12 +32,13 @@ export function activate(context: vscode.ExtensionContext) {
 
   logger.info('Extension', `Workspace root: ${workspaceRoot}`);
 
-  // Initialize log viewer and managers
-  logViewer = new LogViewer(context.extensionUri, workspaceRoot);
-  context.subscriptions.push(logViewer);
-
+  // Initialize history store first
   historyStore = new HistoryStore(workspaceRoot);
   context.subscriptions.push({ dispose: () => historyStore.dispose() });
+
+  // Initialize log viewer with history store reference
+  logViewer = new LogViewer(context.extensionUri, workspaceRoot, historyStore);
+  context.subscriptions.push(logViewer);
 
   agentManager = new AgentManager(workspaceRoot, logViewer, historyStore);
   todoManager = new TodoManager(workspaceRoot, logViewer, historyStore);
@@ -72,6 +73,24 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Check environment on startup
   checkEnvironment();
+
+  // Sync log files on startup
+  setTimeout(() => {
+    logger.info('Extension', 'Performing initial log file sync...');
+    agentManager.syncLogFiles();
+    todoManager.syncLogFiles();
+  }, 2000); // 延迟2秒执行，确保所有组件都已初始化
+
+  // Set up periodic log file sync (every 5 minutes)
+  const syncInterval = setInterval(() => {
+    logger.info('Extension', 'Performing periodic log file sync...');
+    agentManager.syncLogFiles();
+    todoManager.syncLogFiles();
+  }, 5 * 60 * 1000); // 5分钟
+
+  context.subscriptions.push({
+    dispose: () => clearInterval(syncInterval)
+  });
 
   // Show welcome message
   const config = vscode.workspace.getConfiguration('jarvis.ui');
@@ -386,6 +405,25 @@ function registerCommands(context: vscode.ExtensionContext, logViewer: LogViewer
       logger.info('Command', 'Manual statistics refresh triggered');
       statisticsProvider.refresh(true);
       vscode.window.showInformationMessage('Statistics refreshed');
+    })
+  );
+
+  // Sync log files command
+  context.subscriptions.push(
+    vscode.commands.registerCommand('jarvis.syncLogFiles', () => {
+      const logger = Logger.getInstance();
+      logger.info('Command', 'Syncing log files...');
+      
+      // 同步 Agent 和 Todo 的日志文件
+      agentManager.syncLogFiles();
+      todoManager.syncLogFiles();
+      
+      // 刷新所有提供者
+      agentTreeProvider.refresh();
+      todoTreeProvider.refresh();
+      statisticsProvider.refresh(true);
+      
+      vscode.window.showInformationMessage('Log files synchronized successfully');
     })
   );
 

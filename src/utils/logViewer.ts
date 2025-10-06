@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { ClaudeJsonMessage } from '../types';
 import { Logger } from './logger';
+import { HistoryStore } from './historyStore';
 import type { HistoryEntryType } from '../webviews/shared/historyMessages';
 import type {
   LogDataPayload,
@@ -61,7 +62,8 @@ export class LogViewer implements vscode.Disposable {
 
   constructor(
     private readonly extensionUri: vscode.Uri,
-    private readonly workspaceRoot: string
+    private readonly workspaceRoot: string,
+    private readonly historyStore?: HistoryStore
   ) {}
 
   dispose(): void {
@@ -224,6 +226,9 @@ export class LogViewer implements vscode.Disposable {
       const watcher = fs.watch(context.logFile, { persistent: true }, eventType => {
         if (eventType === 'change') {
           this.scheduleUpdate(key);
+        } else if (eventType === 'rename') {
+          // 文件被重命名或删除
+          this.handleFileDeleted(key, context.logFile);
         }
       });
       record.watcher = watcher;
@@ -235,6 +240,9 @@ export class LogViewer implements vscode.Disposable {
     const interval = setInterval(() => {
       if (fs.existsSync(context.logFile)) {
         this.scheduleUpdate(key);
+      } else {
+        // 文件不存在，可能被删除了
+        this.handleFileDeleted(key, context.logFile);
       }
     }, 2000);
     record.interval = interval;
@@ -257,6 +265,34 @@ export class LogViewer implements vscode.Disposable {
     }, 120);
 
     this.updateTimers.set(key, timer);
+  }
+
+  private handleFileDeleted(key: string, logFile: string): void {
+    this.logger.info('LogViewer', `Log file deleted: ${logFile}`);
+    
+    // 关闭相关的面板
+    const state = this.panels.get(key);
+    if (state) {
+      state.panel.dispose();
+    }
+    
+    // 清理监控器
+    this.disposeWatcher(key);
+    
+    // 通知外部系统文件已删除
+    this.notifyFileDeleted(logFile);
+  }
+
+  private notifyFileDeleted(logFile: string): void {
+    this.logger.info('LogViewer', `Notifying file deletion: ${logFile}`);
+    
+    // 通知 HistoryStore 删除相关的历史记录
+    if (this.historyStore) {
+      const removed = this.historyStore.removeByLogFile(logFile);
+      if (removed) {
+        this.logger.info('LogViewer', `Removed history record for deleted log file: ${logFile}`);
+      }
+    }
   }
 
   private disposeWatcher(key: string): void {

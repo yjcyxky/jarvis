@@ -590,6 +590,17 @@ export class AgentManager {
     };
   }
 
+  /**
+   * 同步日志文件状态，清理无效的历史记录
+   */
+  syncLogFiles(): void {
+    const removedCount = this.historyStore.cleanupInvalidRecords();
+    if (removedCount > 0) {
+      this.logger.info('AgentManager', `Cleaned up ${removedCount} invalid history records`);
+      this.markChanged();
+    }
+  }
+
   dispose(): void {
     this.stopAllAgents();
     this.watcher?.dispose();

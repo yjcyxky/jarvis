@@ -108,6 +108,43 @@ export class HistoryStore {
     return [...this.records];
   }
 
+  /**
+   * 清理无效的历史记录（对应的日志文件不存在）
+   */
+  cleanupInvalidRecords(): number {
+    const initialCount = this.records.length;
+    this.records = this.records.filter(record => {
+      try {
+        return fs.existsSync(record.logFile);
+      } catch (error) {
+        console.warn(`Failed to check log file existence: ${record.logFile}`, error);
+        return false;
+      }
+    });
+    
+    const removedCount = initialCount - this.records.length;
+    if (removedCount > 0) {
+      this.save();
+    }
+    
+    return removedCount;
+  }
+
+  /**
+   * 根据日志文件路径删除历史记录
+   */
+  removeByLogFile(logFile: string): boolean {
+    const initialLength = this.records.length;
+    this.records = this.records.filter(record => record.logFile !== logFile);
+    
+    const removed = this.records.length < initialLength;
+    if (removed) {
+      this.save();
+    }
+    
+    return removed;
+  }
+
   dispose(): void {
     if (this.isDirty) {
       this.save();
