@@ -2,10 +2,12 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { TodoItem, TodoExecution } from '../types';
+import { TodoItem, TodoExecution, AgentConfig } from '../types';
 import { LogViewer } from '../utils/logViewer';
 import { HistoryStore, ExecutionHistoryEntry } from '../utils/historyStore';
 import { ClaudeCodeExecutor } from './claudeCodeExecutor';
+import { AgentManager } from './agentManager';
+import { Logger } from '../utils/logger';
 
 export class TodoManager {
   private todos: Map<string, TodoItem[]> = new Map();
@@ -15,14 +17,17 @@ export class TodoManager {
   private executions: Map<string, TodoExecution> = new Map();
   private changeVersion = 0;
   private readonly _onDidChange = new vscode.EventEmitter<void>();
+  private agentManager?: AgentManager;
+  private logger: Logger;
 
   readonly onDidChange: vscode.Event<void> = this._onDidChange.event;
 
   constructor(
     private workspaceRoot: string,
     private readonly logViewer: LogViewer,
-    private readonly historyStore: HistoryStore
+    private readonly historyStore: HistoryStore,
   ) {
+    this.logger = Logger.getInstance();
     this.executor = new ClaudeCodeExecutor();
     this.loadTodos();
     this.setupWatcher();
@@ -228,6 +233,10 @@ export class TodoManager {
     return undefined;
   }
 
+  registerAgentManager(agentManager: AgentManager): void {
+    this.agentManager = agentManager;
+  }
+
   async executeTodo(id: string): Promise<void> {
     const todo = this.getTodoById(id);
     if (!todo) {
@@ -293,7 +302,9 @@ export class TodoManager {
 
     try {
       // Prepare prompt for Claude
-      const prompt = this.buildTodoPrompt(todo);
+      const prompt = this.buildTodoPrompt(todo, this.agentManager?.getAgents());
+
+      this.logger.info("TodoManager", `Prompt: ${prompt}`);
 
       await this.executor.execute(
         `todo-${id}`,
@@ -347,7 +358,7 @@ export class TodoManager {
     }
   }
 
-  private buildTodoPrompt(todo: TodoItem): string {
+  private buildTodoPrompt(todo: TodoItem, agents?: AgentConfig[]): string {
     let prompt = `Please complete the following task:\n\n${todo.text}`;
 
     if (todo.priority) {
@@ -363,6 +374,13 @@ export class TodoManager {
       todo.children.forEach((child, index) => {
         prompt += `\n${index + 1}. ${child.completed ? '[✓]' : '[ ]'} ${child.text}`;
       });
+    }
+
+    if (agents) {
+      const agentList = agents
+        .map((config) => `- ${config.name}: ${config.sourcePath}`)
+        .join('\n');
+      prompt += `\n\nAvailable agents:\n${agentList}`;
     }
 
     prompt += '\n\nPlease complete this task and update any relevant files as needed.';

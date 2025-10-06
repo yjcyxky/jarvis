@@ -42,6 +42,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   agentManager = new AgentManager(workspaceRoot, logViewer, historyStore);
   todoManager = new TodoManager(workspaceRoot, logViewer, historyStore);
+  todoManager.registerAgentManager(agentManager);
 
   logViewer.registerStopHandler('agent', name => agentManager.stopAgent(name));
   logViewer.registerStopHandler('todo', id => todoManager.stopTodo(id));

@@ -119,7 +119,7 @@ const LogEntryCard: React.FC<{ entry: LogEntryViewModel }> = ({ entry }) => {
             {delta && (
               <Tag color="gold">Δ{delta}</Tag>
             )}
-            {typeof entry.tokens === 'number' && (
+            {entry.tokens !== undefined && (
               <Tag color="purple">Tokens: {entry.tokens}</Tag>
             )}
           </Space>

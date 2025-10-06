@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Button, Typography } from 'antd';
+import { Button, Select, Typography } from 'antd';
 import { DownOutlined, UpOutlined } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import Papa from 'papaparse';
@@ -81,16 +81,18 @@ export const CollapsibleContent: React.FC<CollapsibleContentProps> = ({
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const type = useMemo(() => detectContentType(text, isCode), [text, isCode]);
+  const [contentType, setContentType] = useState(type);
+  const [selectorVisible, setSelectorVisible] = useState(text.length > 100);
 
   const shouldCollapse = text.length > maxLength;
   const displayText = shouldCollapse && !isExpanded ? text.slice(0, maxLength) + '...' : text;
   const rawText = text
 
   const renderContent = () => {
-    switch (type) {
+    switch (contentType) {
       case 'csv':
       case 'tsv': {
-        const delimiter = type === 'csv' ? ',' : '\t';
+        const delimiter = contentType === 'csv' ? ',' : '\t';
 
         const parsed = Papa.parse<string[]>(rawText.trim(), {
           delimiter,
@@ -141,9 +143,8 @@ export const CollapsibleContent: React.FC<CollapsibleContentProps> = ({
               width: '100%',
               overflowX: 'auto',
               overflowY: 'hidden',
-              border: '1px solid rgba(255,255,255,0.1)',
+              border: '1px solid #e0e0e0',
               borderRadius: 4,
-              marginBottom: 8,
               boxSizing: 'border-box',
               maxWidth: 'calc(100vw - 200px)', // 避免超出页面
             }}
@@ -154,6 +155,23 @@ export const CollapsibleContent: React.FC<CollapsibleContentProps> = ({
                 minWidth: `${Math.max(headers.length * 150, 600)}px`,
               }}
             >
+              <Select
+                value={contentType}
+                options={["code", "markdown", "text", "csv", "tsv"].map(v => ({ label: v, value: v }))}
+                onChange={(value) => {
+                  setContentType(value as "code" | "markdown" | "text" | "csv" | "tsv");
+                }}
+                style={{
+                  height: 'auto',
+                  fontSize: '12px',
+                  color: 'var(--vscode-descriptionForeground)',
+                  background: 'none',
+                  boxShadow: 'none',
+                  width: 150,
+                  display: selectorVisible ? 'block' : 'none'
+                }}
+              >
+              </Select>
               <SimpleTable
                 defaultHeaders={headerObjects}
                 rows={isExpanded ? rowData : rowData.slice(0, 5)}
@@ -172,16 +190,33 @@ export const CollapsibleContent: React.FC<CollapsibleContentProps> = ({
         return (
           <div
             style={{
-              padding: '4px 8px',
+              border: '1px solid #e0e0e0',
               background: 'rgba(255,255,255,0.03)',
               borderRadius: 4,
-              marginBottom: 8,
+              padding: 6,
               maxWidth: '100%',
               overflowX: 'auto',
               wordBreak: 'break-word'
             }}
           >
-            <ReactMarkdown 
+            <Select
+              value={contentType}
+              options={["code", "markdown", "text", "csv", "tsv"].map(v => ({ label: v, value: v }))}
+              onChange={(value) => {
+                setContentType(value as "code" | "markdown" | "text" | "csv" | "tsv");
+              }}
+              style={{
+                height: 'auto',
+                fontSize: '12px',
+                color: 'var(--vscode-descriptionForeground)',
+                background: 'none',
+                boxShadow: 'none',
+                width: 150,
+                display: selectorVisible ? 'block' : 'none'
+              }}
+            >
+            </Select>
+            <ReactMarkdown
               remarkPlugins={[remarkGfm, remarkFrontmatter]}
               components={{
                 // 确保表格不会超出容器
@@ -194,8 +229,8 @@ export const CollapsibleContent: React.FC<CollapsibleContentProps> = ({
                 ),
                 // 确保代码块不会超出容器
                 pre: ({ children, ...props }) => (
-                  <pre {...props} style={{ 
-                    overflowX: 'auto', 
+                  <pre {...props} style={{
+                    overflowX: 'auto',
                     maxWidth: '100%',
                     whiteSpace: 'pre-wrap',
                     wordBreak: 'break-word'
@@ -205,7 +240,7 @@ export const CollapsibleContent: React.FC<CollapsibleContentProps> = ({
                 ),
                 // 确保代码不会超出容器
                 code: ({ children, ...props }) => (
-                  <code {...props} style={{ 
+                  <code {...props} style={{
                     wordBreak: 'break-word',
                     maxWidth: '100%'
                   }}>
@@ -221,39 +256,80 @@ export const CollapsibleContent: React.FC<CollapsibleContentProps> = ({
 
       case 'code':
         return (
-          <pre
-            style={{
-              background: 'rgba(255,255,255,0.05)',
-              padding: 12,
-              borderRadius: 4,
-              overflowX: 'auto',
-              whiteSpace: 'pre-wrap',
-              maxWidth: '100%',
-              wordBreak: 'break-word'
-            }}
-          >
-            <code>{displayText}</code>
-          </pre>
+          <>
+            <Select
+              value={contentType}
+              options={["code", "markdown", "text", "csv", "tsv"].map(v => ({ label: v, value: v }))}
+              onChange={(value) => {
+                setContentType(value as "code" | "markdown" | "text" | "csv" | "tsv");
+              }}
+              style={{
+                height: 'auto',
+                fontSize: '12px',
+                color: 'var(--vscode-descriptionForeground)',
+                background: 'none',
+                boxShadow: 'none',
+                width: 150,
+                display: selectorVisible ? 'block' : 'none'
+              }}
+            >
+            </Select>
+            <pre
+              style={{
+                border: '1px solid #e0e0e0',
+                padding: 6,
+                background: 'rgba(255,255,255,0.03)',
+                borderRadius: 4,
+                overflowX: 'auto',
+                whiteSpace: 'pre-wrap',
+                maxWidth: '100%',
+                wordBreak: 'break-word'
+              }}
+            >
+              <code>{displayText}</code>
+            </pre>
+          </>
         );
 
       default:
         return (
-          <Typography.Paragraph
-            style={{
-              marginBottom: 8,
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-              overflowX: 'auto',
-              maxWidth: '100%'
-            }}
-          >
-            {displayText.split('\n').map((line, index) => (
-              <React.Fragment key={index}>
-                {line}
-                {index < displayText.split('\n').length - 1 && <br />}
-              </React.Fragment>
-            ))}
-          </Typography.Paragraph>
+          <>
+            <Select
+              value={contentType}
+              options={["code", "markdown", "text", "csv", "tsv"].map(v => ({ label: v, value: v }))}
+              onChange={(value) => {
+                setContentType(value as "code" | "markdown" | "text" | "csv" | "tsv");
+              }}
+              style={{
+                height: 'auto',
+                fontSize: '12px',
+                color: 'var(--vscode-descriptionForeground)',
+                background: 'none',
+                boxShadow: 'none',
+                width: 150,
+                display: selectorVisible ? 'block' : 'none'
+              }}
+            >
+            </Select>
+            <Typography.Paragraph
+              style={{
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                overflowX: 'auto',
+                padding: 6,
+                border: selectorVisible ? '1px solid #e0e0e0' : 'none',
+                borderRadius: 4,
+                maxWidth: '100%'
+              }}
+            >
+              {displayText.split('\n').map((line, index) => (
+                <React.Fragment key={index}>
+                  {line}
+                  {index < displayText.split('\n').length - 1 && <br />}
+                </React.Fragment>
+              ))}
+            </Typography.Paragraph>
+          </>
         );
     }
   };
@@ -268,7 +344,8 @@ export const CollapsibleContent: React.FC<CollapsibleContentProps> = ({
           icon={isExpanded ? <UpOutlined /> : <DownOutlined />}
           onClick={() => setIsExpanded(!isExpanded)}
           style={{
-            padding: 8,
+            padding: 6,
+            marginTop: 6,
             height: 'auto',
             fontSize: '12px',
             color: 'var(--vscode-descriptionForeground)',
