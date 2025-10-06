@@ -505,6 +505,34 @@ export class LogViewer implements vscode.Disposable {
       return servers.map(server => `${server.name} (${server.status})`).join(' | ');
     };
 
+    const formatToolResult = (content: unknown): string => {
+      if (content == null) return '';
+      let text = String(content);
+
+      // If there is no real newline but there is a literal \n, restore it first
+      if (!/\n/.test(text) && /\\n/.test(text)) {
+        text = text.replace(/\\n/g, '\n');
+      }
+      // Unify line breaks (CRLF/CR -> LF)
+      text = text.replace(/\r\n?/g, '\n');
+
+      const lines = text.split('\n');
+
+      const cleaned = lines.map((line) =>
+        line
+          .replace(/^\uFEFF/, '') // Remove BOM
+          // Remove the row number prefix with "arrow", avoiding misjudging the markdown ordered list
+          .replace(/^\s*\d+→/, '')
+      );
+
+      let result = cleaned.join('\n');
+
+      // Fix common escapes
+      result = result.replace(/\\"/g, '"').replace(/\\t/g, '\t');
+
+      return result.trim();
+    };
+
     switch (message.type) {
       case 'assistant':
       case 'user': {
@@ -519,9 +547,10 @@ export class LogViewer implements vscode.Disposable {
             const rendered = item.input ? JSON.stringify(item.input, null, 2) : undefined;
             append(rendered, true);
           } else if (item.type === 'tool_result') {
-            const rendered = item.content ? JSON.stringify(item.content, null, 2) : undefined;
+            const rendered = item.content ? formatToolResult(item.content) : undefined;
+            this.logger.info('LogViewer', `Tool result: ${rendered}`);
             append('Tool result');
-            append(rendered, true);
+            append(rendered, false);
           }
         });
         break;

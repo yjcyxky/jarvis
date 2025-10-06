@@ -83,7 +83,9 @@ export class TodoManager {
     const todos: TodoItem[] = [];
     const stack: { item: TodoItem; indent: number }[] = [];
 
-    lines.forEach((line, lineNumber) => {
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
       const todoMatch = line.match(/^(\s*)- \[([ xX])\] (.+)$/);
 
       if (todoMatch) {
@@ -107,15 +109,51 @@ export class TodoManager {
         }
 
         const todoItem: TodoItem = {
-          id: `${path.basename(filePath)}-${lineNumber}`,
+          id: `${path.basename(filePath)}-${i}`,
           text: cleanText,
           completed,
           priority,
           file: filePath,
-          line: lineNumber + 1,
+          line: i + 1,
           executionStatus: completed ? 'success' : 'pending',
           children: []
         };
+
+        // Check for agent-parameters block after this todo item
+        let j = i + 1;
+        while (j < lines.length && lines[j].trim() === '') {
+          j++; // Skip empty lines
+        }
+
+        if (j < lines.length && lines[j].trim() === '```agent-parameters') {
+          j++; // Move past the opening marker
+          const paramLines: string[] = [];
+          
+          // Collect parameter lines until closing marker
+          while (j < lines.length && lines[j].trim() !== '```') {
+            paramLines.push(lines[j]);
+            j++;
+          }
+          
+          if (j < lines.length && lines[j].trim() === '```') {
+            // Parse YAML parameters
+            try {
+              const yaml = require('yaml');
+              const yamlContent = paramLines.join('\n');
+              if (yamlContent.trim()) {
+                const params = yaml.parse(yamlContent);
+                if (params && typeof params === 'object') {
+                  todoItem.parameters = new Map(Object.entries(params));
+                }
+              }
+            } catch (error) {
+              console.warn(`Failed to parse agent-parameters for todo "${cleanText}":`, error);
+            }
+            i = j; // Update i to skip the processed parameter block
+          } else {
+            i = j - 1; // If no closing marker found, backtrack
+          }
+        }
 
         // Find parent based on indentation
         while (stack.length > 0 && stack[stack.length - 1].indent >= indent) {
@@ -136,7 +174,9 @@ export class TodoManager {
 
         stack.push({ item: todoItem, indent });
       }
-    });
+
+      i++;
+    }
 
     return todos;
   }
@@ -296,6 +336,10 @@ export class TodoManager {
 
     if (todo.priority) {
       prompt += `\n\nPriority: ${todo.priority.toUpperCase()}`;
+    }
+
+    if (todo.parameters) {
+      prompt += `\n\nParameters: ${JSON.stringify(Object.fromEntries(todo.parameters))} \n\n The parameters might be needed for the agent execution.`;
     }
 
     if (todo.children && todo.children.length > 0) {

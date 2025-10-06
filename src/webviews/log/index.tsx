@@ -19,7 +19,7 @@ import {
   ClockCircleOutlined,
   CodeOutlined,
   FileSearchOutlined,
-  ReloadOutlined
+  ReloadOutlined,
 } from '@ant-design/icons';
 import 'antd/dist/reset.css';
 import '../shared/theme.css';
@@ -29,6 +29,7 @@ import type {
   LogFromWebviewMessage,
   LogToWebviewMessage
 } from '../shared/logMessages';
+import { CollapsibleContent } from './ContentRender';
 
 type VsCodeApi = {
   postMessage: (message: LogFromWebviewMessage) => void;
@@ -123,20 +124,14 @@ const LogEntryCard: React.FC<{ entry: LogEntryViewModel }> = ({ entry }) => {
           </Space>
         </Space>
         <Space direction="vertical" size={8} style={{ width: '100%' }}>
-          {entry.payload.map((segment, index) =>
-            segment.isCode ? (
-              <Typography.Paragraph
-                key={index}
-                style={{ marginBottom: 0, background: 'rgba(255, 255, 255, 0.04)', borderRadius: 4, padding: 12 }}
-              >
-                <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{segment.text}</pre>
-              </Typography.Paragraph>
-            ) : (
-              <Typography.Paragraph key={index} style={{ marginBottom: 0, whiteSpace: 'pre-wrap' }}>
-                {segment.text}
-              </Typography.Paragraph>
-            )
-          )}
+          {entry.payload.map((segment, index) => (
+            <CollapsibleContent
+              key={index}
+              text={segment.text}
+              isCode={segment.isCode}
+              maxLength={500}
+            />
+          ))}
         </Space>
       </Space>
     </Card>

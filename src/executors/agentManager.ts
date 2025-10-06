@@ -28,10 +28,10 @@ export class AgentManager {
     private readonly logViewer: LogViewer,
     private readonly historyStore: HistoryStore
   ) {
+    this.logger = Logger.getInstance();
     this.executor = new ClaudeCodeExecutor();
     this.loadAgents();
     this.setupWatcher();
-    this.logger = Logger.getInstance();
     this.loadAutoExecuteConfig();
     
     // 监听配置变化
@@ -88,6 +88,7 @@ export class AgentManager {
 
   private async autoExecuteIfConfigured(): Promise<void> {
     if (!this.autoExecuteAgent) {
+      this.logger.info("AgentManager", "No auto-execute agent configured");
       return;
     }
 
@@ -202,6 +203,29 @@ export class AgentManager {
     });
   }
 
+  private findAgentsFromResources(): string[] {
+    const extensionPath = vscode.extensions.getExtension('OpenProphetDB.openjarvis')?.extensionPath;
+    if (!extensionPath) {
+      return [];
+    }
+    
+    const resourcesDir = path.join(extensionPath, 'resources', 'templates');
+    if (!fs.existsSync(resourcesDir)) {
+      return [];
+    }
+    
+    const files = fs.readdirSync(resourcesDir);
+    const agentFiles = [];
+    for (const file of files) {
+      if (file.endsWith('.md')) {
+        agentFiles.push(path.join(resourcesDir, file));
+      }
+    }
+
+    this.logger.info("AgentManager", `Found ${agentFiles.length} agents in resources: ${agentFiles.join(', ')}`);
+    return agentFiles;
+  }
+
   private loadAgents(): void {
     const agentDir = this.getAgentDir();
 
@@ -215,10 +239,12 @@ export class AgentManager {
     this.agentSources.clear();
 
     const files = fs.readdirSync(agentDir);
-    for (const file of files) {
+    const filesFromResources = this.findAgentsFromResources();
+    const allFiles = [...files, ...filesFromResources];
+    for (const file of allFiles) {
       if (file.endsWith('.json') || file.endsWith('.md')) {
         try {
-          const filePath = path.join(agentDir, file);
+          const filePath = filesFromResources.includes(file) ? file : path.join(agentDir, file);
           const content = fs.readFileSync(filePath, 'utf-8');
 
           let agent: AgentConfig;
@@ -277,7 +303,7 @@ export class AgentManager {
     try {
       frontmatter = yaml.parse(frontmatterStr);
     } catch (error) {
-      console.error(`Failed to parse YAML frontmatter in ${filename}:`, error);
+      this.logger.error("AgentManager", `Failed to parse YAML frontmatter in ${filename}:`, error as string);
       // 使用默认值
     }
 
@@ -326,6 +352,10 @@ export class AgentManager {
 
   getAgent(name: string): AgentConfig | undefined {
     return this.agents.get(name);
+  }
+
+  getAgentNames(): string[] {
+    return Array.from(this.agents.keys());
   }
 
   getStatus(name: string): AgentStatus | undefined {

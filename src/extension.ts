@@ -302,15 +302,22 @@ function registerCommands(context: vscode.ExtensionContext, logViewer: LogViewer
   context.subscriptions.push(
     vscode.commands.registerCommand('jarvis.quickAccess', async () => {
       const options = [
+        // 执行操作
         { label: '$(play) Start Agent', value: 'start-agent' },
         { label: '$(run) Execute TODO', value: 'execute-todo' },
-        { label: '$(output) View Logs', value: 'view-logs' },
+        { label: '$(sync) Trigger Manual Execute', value: 'trigger-manual-execute' },
+        { kind: vscode.QuickPickItemKind.Separator, label: '' },
+        
+        // 视图操作
         { label: '$(robot) Open Agents View', value: 'open-agents' },
         { label: '$(checklist) Open TODOs View', value: 'open-todos' },
         { label: '$(graph) Open Statistics', value: 'open-stats' },
+        { label: '$(output) View Logs', value: 'view-logs' },
+        { kind: vscode.QuickPickItemKind.Separator, label: '' },
+        
+        // 系统操作
         { label: '$(settings-gear) Configure', value: 'configure' },
         { label: '$(refresh) Refresh All', value: 'refresh-all' },
-        { label: '$(sync) Trigger Auto-Execute', value: 'trigger-auto-execute' },
         { label: '$(info) Show Auto-Execute Status', value: 'show-status' }
       ];
 
@@ -345,8 +352,8 @@ function registerCommands(context: vscode.ExtensionContext, logViewer: LogViewer
             vscode.commands.executeCommand('jarvis.refreshAgents');
             vscode.commands.executeCommand('jarvis.refreshTodos');
             break;
-          case 'trigger-auto-execute':
-            vscode.commands.executeCommand('jarvis.triggerAutoExecute');
+          case 'trigger-manual-execute':
+            vscode.commands.executeCommand('jarvis.triggerManualExecute');
             break;
           case 'show-status':
             vscode.commands.executeCommand('jarvis.showAutoExecuteStatus');
@@ -704,6 +711,36 @@ function registerCommands(context: vscode.ExtensionContext, logViewer: LogViewer
         type: 'all',
         title: 'All Execution History'
       });
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('jarvis.selectAutoExecuteAgent', async () => {
+      const agents = agentManager.getAgents();
+      if (agents.length === 0) {
+        vscode.window.showWarningMessage('No agents available. Please create an agent first.');
+        return;
+      }
+
+      const currentConfig = vscode.workspace.getConfiguration('jarvis.autoExecute');
+      const currentAgentName = currentConfig.get<string>('agentName', '');
+
+      const selected = await vscode.window.showQuickPick(
+        agents.map(a => ({
+          label: a.name,
+          description: a.description || 'No description',
+          picked: a.name === currentAgentName
+        })),
+        { 
+          placeHolder: 'Select an agent for auto-execution',
+          title: 'Select Auto-Execute Agent'
+        }
+      );
+
+      if (selected) {
+        await currentConfig.update('agentName', selected.label, vscode.ConfigurationTarget.Workspace);
+        vscode.window.showInformationMessage(`Auto-execute agent set to: ${selected.label}`);
+      }
     })
   );
 }

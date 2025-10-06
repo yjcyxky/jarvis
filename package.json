@@ -126,6 +126,11 @@
         "command": "jarvis.viewAllHistory",
         "title": "Jarvis: View All History",
         "icon": "$(history)"
+      },
+      {
+        "command": "jarvis.selectAutoExecuteAgent",
+        "title": "Jarvis: Select Auto-Execute Agent",
+        "icon": "$(list-selection)"
       }
     ],
     "viewsContainers": {
@@ -353,13 +358,6 @@
           "default": "claude-sonnet-4-5-20250929",
           "description": "Claude model to use"
         },
-        "jarvis.claude.defaultParams.temperature": {
-          "type": "number",
-          "default": 0.7,
-          "minimum": 0,
-          "maximum": 1,
-          "description": "Temperature for Claude responses"
-        },
         "jarvis.claude.requiredMcps": {
           "type": "array",
           "default": [
@@ -386,7 +384,7 @@
         "jarvis.autoExecute.agentName": {
           "type": "string",
           "default": "",
-          "description": "Name of the agent to execute automatically"
+          "description": "Name of the agent to execute automatically. Use 'Jarvis: Select Auto-Execute Agent' command to choose from available agents."
         },
         "jarvis.autoExecute.frequency": {
           "type": "string",
@@ -401,7 +399,7 @@
         "jarvis.autoExecute.lastExecution": {
           "type": "string",
           "default": "",
-          "description": "Last execution time (ISO string)"
+          "description": "Last execution time (ISO string) - automatically updated by the system"
         },
         "jarvis.logs.format": {
           "type": "string",
@@ -412,6 +410,17 @@
             "text"
           ],
           "description": "Log file format"
+        },
+        "jarvis.logs.level": {
+          "type": "string",
+          "default": "info",
+          "enum": [
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ],
+          "description": "Minimum log level to output. DEBUG includes all messages, INFO excludes debug, WARN excludes debug and info, ERROR only shows errors."
         },
         "jarvis.logs.realtimeFlush": {
           "type": "boolean",
@@ -455,6 +464,7 @@
     "@ant-design/icons": "^5.2.6",
     "@types/jest": "^29.5.11",
     "@types/node": "^20.10.5",
+    "@types/papaparse": "^5.3.16",
     "@types/react": "^18.2.48",
     "@types/react-dom": "^18.2.18",
     "@types/vscode": "^1.85.0",
@@ -478,6 +488,11 @@
   },
   "dependencies": {
     "jsonl": "^1.0.0",
+    "papaparse": "^5.5.3",
+    "react-markdown": "^10.1.0",
+    "remark-frontmatter": "^5.0.0",
+    "remark-gfm": "^4.0.1",
+    "simple-table-core": "^1.3.9",
     "vsce": "^2.15.0",
     "yaml": "^2.8.1"
   },

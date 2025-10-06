@@ -155,8 +155,6 @@ interface ClaudeJsonMessage {
       "print": true,
       "add-dirs": ["${workspaceRoot}"],
       "model": "claude-sonnet-4-5-20250929",
-      "max-tokens": 4096,
-      "temperature": 0.7,
       "mcp-config": "${workspaceRoot}/.jarvis/mcp-config.json"
     },
     "requiredMcps": ["mcpx", "chrome-devtools-mcp"],

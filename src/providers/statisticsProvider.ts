@@ -62,7 +62,7 @@ export class StatisticsProvider implements vscode.TreeDataProvider<StatisticsTre
     private todoManager: TodoManager
   ) {
     this.workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
-    this.logger.info('StatisticsProvider', `Initialized with workspace root: ${this.workspaceRoot}`);
+    this.logger.debug('StatisticsProvider', `Initialized with workspace root: ${this.workspaceRoot}`);
 
     this.startAutoRefresh();
     this.disposables.push(
@@ -107,7 +107,7 @@ export class StatisticsProvider implements vscode.TreeDataProvider<StatisticsTre
   }
 
   private updateClaudeStats(): void {
-    this.logger.info('StatisticsProvider', 'Starting Claude stats update...');
+    this.logger.debug('StatisticsProvider', 'Starting Claude stats update...');
 
     // Support multiple possible locations
     const possibleRoots = [
@@ -222,9 +222,9 @@ export class StatisticsProvider implements vscode.TreeDataProvider<StatisticsTre
       }
     });
 
-    this.logger.info('StatisticsProvider',
+    this.logger.debug('StatisticsProvider',
       `Stats Update Complete: ${totalTokens} tokens, ${totalExecutions} executions, $${totalCost.toFixed(4)} cost`);
-    this.logger.info('StatisticsProvider',
+    this.logger.debug('StatisticsProvider',
       `Processed ${processedFiles.size} files`);
 
     this.claudeUsageStats = {

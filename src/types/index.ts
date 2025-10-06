@@ -28,6 +28,7 @@ export interface TodoItem {
   children?: TodoItem[];
   executionStatus?: 'pending' | 'running' | 'success' | 'failed' | 'paused';
   lastExecution?: TodoExecution;
+  parameters?: Map<string, any>;  // 可选:参数列表
 }
 
 export interface TodoExecution {
@@ -89,8 +90,6 @@ export interface JarvisConfig {
       print: boolean;
       'add-dirs'?: string[];
       model?: string;
-      'max-tokens'?: number;
-      temperature?: number;
       'mcp-config'?: string;
     };
     requiredMcps: string[];

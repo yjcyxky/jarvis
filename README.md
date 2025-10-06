@@ -136,8 +136,6 @@ Configure Jarvis through VSCode settings (`Cmd/Ctrl + ,`):
   "jarvis.paths.todoDir": ".jarvis/todos",
   "jarvis.claude.executable": "claude",
   "jarvis.claude.defaultParams.model": "claude-sonnet-4-5-20250929",
-  "jarvis.claude.defaultParams.temperature": 0.7,
-  "jarvis.claude.defaultParams.max-tokens": 4096,
   "jarvis.ui.autoRefresh": true,
   "jarvis.ui.refreshInterval": 1000,
   "jarvis.logs.retentionDays": 30,
