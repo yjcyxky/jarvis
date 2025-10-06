@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as vscode from 'vscode';
-import type { ExecutionHistoryEntry } from './historyStore';
+import { HistoryStore, type ExecutionHistoryEntry } from './historyStore';
 import { AgentManager } from '../executors/agentManager';
 import { TodoManager } from '../executors/todoManager';
 import { Logger } from './logger';
@@ -35,7 +35,8 @@ export class HistoryViewer implements vscode.Disposable {
     private readonly extensionUri: vscode.Uri,
     private readonly agentManager: AgentManager,
     private readonly todoManager: TodoManager,
-    private readonly logViewer: LogViewer
+    private readonly logViewer: LogViewer,
+    private readonly historyStore: HistoryStore
   ) {
     this.disposables.push(
       this.agentManager.onDidChange(() => this.refreshAll()),
@@ -101,6 +102,9 @@ export class HistoryViewer implements vscode.Disposable {
           break;
         case 'openSource':
           await this.handleOpenSource(state, message.payload.entryId);
+          break;
+        case 'deleteEntry':
+          await this.handleDeleteEntry(state, message.payload.entryId);
           break;
         default:
           this.logger.warn('HistoryViewer', `Received unknown message: ${JSON.stringify(message)}`);
@@ -313,6 +317,75 @@ export class HistoryViewer implements vscode.Disposable {
       vscode.window.showErrorMessage(
         `Failed to open source file: ${error instanceof Error ? error.message : String(error)}`
       );
+    }
+  }
+
+  private async handleDeleteEntry(state: HistoryPanelState, entryId: string): Promise<void> {
+    this.enqueueMessage(state, { type: 'setLoading', payload: true });
+
+    try {
+      const entry = this.historyStore.getById(entryId);
+
+      if (!entry) {
+        vscode.window.showWarningMessage('History entry no longer exists.');
+        this.enqueueMessage(state, {
+          type: 'showError',
+          payload: { message: 'History entry no longer exists.' }
+        });
+        return;
+      }
+
+      const logExists = entry.logFile && fs.existsSync(entry.logFile);
+      const deleteRecordOption = 'Delete Record';
+      const deleteRecordAndLogOption = 'Delete Record and Log File';
+      const choices = logExists
+        ? [deleteRecordOption, deleteRecordAndLogOption]
+        : [deleteRecordOption];
+
+      const selection = await vscode.window.showWarningMessage(
+        `Delete run "${entry.label}"? This action cannot be undone.`,
+        {
+          modal: true,
+          detail: logExists ? `Log file: ${entry.logFile}` : undefined
+        },
+        ...choices
+      );
+
+      if (!selection) {
+        return;
+      }
+
+      const removed = this.historyStore.removeById(entryId);
+      if (!removed) {
+        vscode.window.showWarningMessage('Failed to remove the selected history entry.');
+        this.enqueueMessage(state, {
+          type: 'showError',
+          payload: { message: 'Failed to remove the selected history entry.' }
+        });
+        return;
+      }
+
+      if (selection === deleteRecordAndLogOption && removed.logFile && fs.existsSync(removed.logFile)) {
+        try {
+          await fs.promises.unlink(removed.logFile);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          vscode.window.showErrorMessage(
+            `History entry removed, but failed to delete log file: ${message}`
+          );
+        }
+      }
+
+      if (removed.type === 'agent') {
+        this.agentManager.notifyHistoryChange();
+      } else if (removed.type === 'todo') {
+        this.todoManager.notifyHistoryChange();
+      }
+
+      vscode.window.showInformationMessage('History entry deleted.');
+    } finally {
+      this.postData(state);
+      this.enqueueMessage(state, { type: 'setLoading', payload: false });
     }
   }
 

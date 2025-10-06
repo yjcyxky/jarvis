@@ -50,4 +50,5 @@ export type HistoryFromWebviewMessage =
   | { type: 'ready' }
   | { type: 'refresh' }
   | { type: 'openLog'; payload: { entryId: string } }
-  | { type: 'openSource'; payload: { entryId: string } };
+  | { type: 'openSource'; payload: { entryId: string } }
+  | { type: 'deleteEntry'; payload: { entryId: string } };

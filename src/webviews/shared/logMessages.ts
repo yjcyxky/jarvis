@@ -63,4 +63,5 @@ export type LogFromWebviewMessage =
   | { type: 'ready' }
   | { type: 'refresh' }
   | { type: 'openLogFile' }
-  | { type: 'openSource' };
+  | { type: 'openSource' }
+  | { type: 'stopExecution' };

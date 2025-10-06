@@ -104,6 +104,21 @@ export class HistoryStore {
     return typeof limit === 'number' ? filtered.slice(0, limit) : filtered;
   }
 
+  getById(id: string): ExecutionHistoryEntry | undefined {
+    return this.records.find(record => record.id === id);
+  }
+
+  removeById(id: string): ExecutionHistoryEntry | undefined {
+    const index = this.records.findIndex(record => record.id === id);
+    if (index === -1) {
+      return undefined;
+    }
+
+    const [removed] = this.records.splice(index, 1);
+    this.save();
+    return removed;
+  }
+
   getAll(): ExecutionHistoryEntry[] {
     return [...this.records];
   }

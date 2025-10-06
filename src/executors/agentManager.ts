@@ -648,6 +648,10 @@ export class AgentManager {
     return this.changeVersion;
   }
 
+  notifyHistoryChange(): void {
+    this.markChanged();
+  }
+
   private markChanged(): void {
     this.changeVersion++;
     this._onDidChange.fire();

@@ -2,7 +2,7 @@
   "name": "openjarvis",
   "displayName": "Jarvis - AI Agent Manager",
   "description": "Manage and execute AI-based agents with Claude Code integration",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "publisher": "OpenProphetDB",
   "icon": "resources/jarvis-icon.png",
   "engines": {
@@ -41,6 +41,11 @@
         "command": "jarvis.executeTodo",
         "title": "Jarvis: Execute TODO",
         "icon": "$(run)"
+      },
+      {
+        "command": "jarvis.stopTodo",
+        "title": "Jarvis: Stop TODO",
+        "icon": "$(debug-stop)"
       },
       {
         "command": "jarvis.openAgentLog",
@@ -242,6 +247,11 @@
         {
           "command": "jarvis.executeTodo",
           "when": "view == jarvis.todos && viewItem == todo.pending",
+          "group": "inline"
+        },
+        {
+          "command": "jarvis.stopTodo",
+          "when": "view == jarvis.todos && viewItem == todo.running",
           "group": "inline"
         },
         {

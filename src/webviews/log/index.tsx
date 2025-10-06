@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Alert,
@@ -20,6 +20,7 @@ import {
   CodeOutlined,
   FileSearchOutlined,
   ReloadOutlined,
+  StopOutlined
 } from '@ant-design/icons';
 import 'antd/dist/reset.css';
 import '../shared/theme.css';
@@ -140,6 +141,7 @@ const LogEntryCard: React.FC<{ entry: LogEntryViewModel }> = ({ entry }) => {
 
 const LogApp: React.FC = () => {
   const [state, setState] = useState<LogState>({ loading: true });
+  const [isStopping, setIsStopping] = useState(false);
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent<LogToWebviewMessage>) => {
@@ -150,9 +152,13 @@ const LogApp: React.FC = () => {
           break;
         case 'setLoading':
           setState(prev => ({ ...prev, loading: message.payload }));
+          if (!message.payload) {
+            setIsStopping(false);
+          }
           break;
         case 'showError':
           setState(prev => ({ ...prev, loading: false, error: message.payload.message }));
+          setIsStopping(false);
           break;
         default:
           break;
@@ -166,6 +172,21 @@ const LogApp: React.FC = () => {
       window.removeEventListener('message', handleMessage);
     };
   }, []);
+
+  useEffect(() => {
+    const status = state.data?.header.run?.status;
+    if (status !== 'running' && isStopping) {
+      setIsStopping(false);
+    }
+  }, [state.data?.header.run?.status, isStopping]);
+
+  const handleStop = useCallback(() => {
+    if (isStopping) {
+      return;
+    }
+    setIsStopping(true);
+    vscode.postMessage({ type: 'stopExecution' });
+  }, [isStopping]);
 
   const statsItems = useMemo(() => {
     const stats = state.data?.stats;
@@ -239,6 +260,18 @@ const LogApp: React.FC = () => {
                 Raw Log
               </Button>
             </Tooltip>
+            {headerContent?.run?.status === 'running' && (
+              <Tooltip title="Stop execution">
+                <Button
+                  danger
+                  icon={<StopOutlined />}
+                  loading={isStopping}
+                  onClick={handleStop}
+                >
+                  Stop
+                </Button>
+              </Tooltip>
+            )}
             <Tooltip title={headerContent?.run?.sourceFile ? 'Open source file' : 'No source file'}>
               <Button
                 icon={<CodeOutlined />}

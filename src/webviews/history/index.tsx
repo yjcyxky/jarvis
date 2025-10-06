@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Alert,
@@ -20,7 +20,8 @@ import {
   ClockCircleOutlined,
   FileTextOutlined,
   ReloadOutlined,
-  ThunderboltOutlined
+  ThunderboltOutlined,
+  DeleteOutlined
 } from '@ant-design/icons';
 import 'antd/dist/reset.css';
 import '../shared/theme.css';
@@ -103,6 +104,7 @@ function formatDuration(ms?: number): string {
 
 const HistoryApp: React.FC = () => {
   const [state, setState] = useState<HistoryState>({ loading: true });
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent<HistoryToWebviewMessage>) => {
@@ -110,12 +112,23 @@ const HistoryApp: React.FC = () => {
       switch (message.type) {
         case 'historyData':
           setState({ loading: false, data: message.payload, error: undefined });
+          setDeletingIds(prev => {
+            const activeIds = new Set(message.payload.entries.map(entry => entry.id));
+            const next = new Set<string>();
+            prev.forEach(id => {
+              if (activeIds.has(id)) {
+                next.add(id);
+              }
+            });
+            return next;
+          });
           break;
         case 'setLoading':
           setState(prev => ({ ...prev, loading: message.payload }));
           break;
         case 'showError':
           setState(prev => ({ ...prev, loading: false, error: message.payload.message }));
+          setDeletingIds(new Set());
           break;
         default:
           break;
@@ -128,6 +141,15 @@ const HistoryApp: React.FC = () => {
     return () => {
       window.removeEventListener('message', handleMessage);
     };
+  }, []);
+
+  const handleDelete = useCallback((entryId: string) => {
+    setDeletingIds(prev => {
+      const next = new Set(prev);
+      next.add(entryId);
+      return next;
+    });
+    vscode.postMessage({ type: 'deleteEntry', payload: { entryId } });
   }, []);
 
   const columns: ColumnsType<HistoryEntryViewModel> = useMemo(() => [
@@ -173,7 +195,7 @@ const HistoryApp: React.FC = () => {
     {
       title: 'Actions',
       key: 'actions',
-      width: 160,
+      width: 240,
       render: (_, record) => (
         <Space>
           <Button
@@ -192,10 +214,21 @@ const HistoryApp: React.FC = () => {
               Source
             </Button>
           </Tooltip>
+          <Tooltip title="Delete this run">
+            <Button
+              size="small"
+              danger
+              loading={deletingIds.has(record.id)}
+              icon={<DeleteOutlined />}
+              onClick={() => handleDelete(record.id)}
+            >
+              Delete
+            </Button>
+          </Tooltip>
         </Space>
       )
     }
-  ], []);
+  ], [deletingIds, handleDelete]);
 
   const summaryCards = useMemo(() => {
     const summary = state.data?.summary;

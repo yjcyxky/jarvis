@@ -59,6 +59,7 @@ export class LogViewer implements vscode.Disposable {
   private readonly panels = new Map<string, LogPanelState>();
   private readonly watchers = new Map<string, WatcherRecord>();
   private readonly updateTimers = new Map<string, NodeJS.Timeout>();
+  private readonly stopHandlers = new Map<LogType, (id: string) => Promise<void> | void>();
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -74,6 +75,10 @@ export class LogViewer implements vscode.Disposable {
     this.updateTimers.forEach(timer => clearTimeout(timer));
     this.updateTimers.clear();
     this.contexts.clear();
+  }
+
+  registerStopHandler(type: LogType, handler: (id: string) => Promise<void> | void): void {
+    this.stopHandlers.set(type, handler);
   }
 
   async openLog(context: LogContext): Promise<void> {
@@ -143,6 +148,9 @@ export class LogViewer implements vscode.Disposable {
         case 'openSource':
           await this.openSourceFile(state.context.run?.sourceFile);
           break;
+        case 'stopExecution':
+          void this.handleStopRequest(state);
+          break;
         default:
           this.logger.warn('LogViewer', `Received unknown message: ${JSON.stringify(message)}`);
       }
@@ -206,6 +214,39 @@ export class LogViewer implements vscode.Disposable {
           this.logger.error('LogViewer', 'Failed to post queued message', err);
         });
       }
+    }
+  }
+
+  private async handleStopRequest(state: LogPanelState): Promise<void> {
+    const handler = this.stopHandlers.get(state.context.type);
+
+    if (!handler) {
+      vscode.window.showWarningMessage('Stopping is not supported for this run type.');
+      this.enqueueMessage(state, {
+        type: 'showError',
+        payload: { message: 'Stopping is not supported for this run type.' }
+      });
+      this.enqueueMessage(state, { type: 'setLoading', payload: false });
+      return;
+    }
+
+    if (state.context.run?.status !== 'running') {
+      vscode.window.showInformationMessage('The selected run is not currently running.');
+      this.enqueueMessage(state, {
+        type: 'showError',
+        payload: { message: 'The selected run is not currently running.' }
+      });
+      this.enqueueMessage(state, { type: 'setLoading', payload: false });
+      return;
+    }
+
+    try {
+      await handler(state.context.id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      vscode.window.showErrorMessage(`Failed to stop execution: ${message}`);
+      this.enqueueMessage(state, { type: 'showError', payload: { message } });
+      this.enqueueMessage(state, { type: 'setLoading', payload: false });
     }
   }
 
@@ -585,10 +626,19 @@ export class LogViewer implements vscode.Disposable {
             const rendered = item.input ? JSON.stringify(item.input, null, 2) : undefined;
             append(rendered, true);
           } else if (item.type === 'tool_result') {
-            const rendered = item.content ? formatToolResult(item.content) : undefined;
-            this.logger.info('LogViewer', `Tool result: ${rendered}`);
             append('Tool result');
-            append(rendered, false);
+            let rendered: string | undefined;
+            if (typeof item.content === 'string') {
+              rendered = formatToolResult(item.content);
+              append(rendered, false);
+            } else if (typeof item.content === 'object' && item.content !== null) {
+              rendered = JSON.stringify(item.content, null, 2);
+              append(rendered, true);
+            } else {
+              rendered = String(item.content || '');
+              append(rendered, false);
+            }
+            this.logger.info('LogViewer', `Tool result rendered: ${rendered?.substring(0, 100)}${rendered && rendered.length > 100 ? '...' : ''}`);
           }
         });
         break;

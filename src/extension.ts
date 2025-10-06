@@ -43,12 +43,16 @@ export function activate(context: vscode.ExtensionContext) {
   agentManager = new AgentManager(workspaceRoot, logViewer, historyStore);
   todoManager = new TodoManager(workspaceRoot, logViewer, historyStore);
 
+  logViewer.registerStopHandler('agent', name => agentManager.stopAgent(name));
+  logViewer.registerStopHandler('todo', id => todoManager.stopTodo(id));
+
   // Initialize history viewer
   historyViewer = new HistoryViewer(
     context.extensionUri,
     agentManager,
     todoManager,
-    logViewer
+    logViewer,
+    historyStore
   );
   context.subscriptions.push(historyViewer);
 
@@ -225,6 +229,52 @@ function registerCommands(context: vscode.ExtensionContext, logViewer: LogViewer
             vscode.window.showErrorMessage(`Failed to execute TODO: ${error}`);
           }
         }
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('jarvis.stopTodo', async (target?: TodoTreeItem | string) => {
+      let todoId: string | undefined;
+
+      if (typeof target === 'string') {
+        todoId = target;
+      } else if (target instanceof TodoTreeItem) {
+        todoId = target.todo.id;
+      }
+
+      if (!todoId) {
+        const runningTodos = todoManager
+          .getAllTodos()
+          .filter(todo => todo.executionStatus === 'running');
+
+        if (runningTodos.length === 0) {
+          vscode.window.showInformationMessage('No running TODO tasks to stop.');
+          return;
+        }
+
+        const picked = await vscode.window.showQuickPick(
+          runningTodos.map(todo => ({
+            label: todo.text,
+            description: `${path.basename(todo.file)}:${todo.line}`,
+            todo
+          })),
+          { placeHolder: 'Select a running TODO to stop' }
+        );
+
+        if (!picked) {
+          return;
+        }
+
+        todoId = picked.todo.id;
+      }
+
+      try {
+        await todoManager.stopTodo(todoId);
+        todoTreeProvider.refresh();
+        statisticsProvider.refresh(true);
+      } catch (error) {
+        vscode.window.showErrorMessage(`Failed to stop TODO: ${error}`);
       }
     })
   );
