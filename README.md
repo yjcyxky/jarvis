@@ -13,6 +13,15 @@ A powerful VSCode extension for managing and executing AI-based agents with Clau
 
 **📖 [中文文档](README_CN.md) | English Documentation**
 
+## VSCode Marketplace
+
+You can install Jarvis from VSCode Marketplace:
+
+[![VSCode Marketplace](https://img.shields.io/visual-studio-marketplace/v/OpenProphetDB.openjarvis?style=for-the-badge&logo=visual-studio-code&logoColor=white&label=VSCode%20Marketplace&color=007ACC)](https://marketplace.visualstudio.com/items?itemName=OpenProphetDB.openjarvis)
+[![Downloads](https://img.shields.io/visual-studio-marketplace/d/OpenProphetDB.openjarvis?style=for-the-badge&logo=visual-studio-code&logoColor=white&label=Downloads&color=green)](https://marketplace.visualstudio.com/items?itemName=OpenProphetDB.openjarvis)
+[![Rating](https://img.shields.io/visual-studio-marketplace/r/OpenProphetDB.openjarvis?style=for-the-badge&logo=visual-studio-code&logoColor=white&label=Rating&color=orange)](https://marketplace.visualstudio.com/items?itemName=OpenProphetDB.openjarvis)
+[![Install](https://img.shields.io/visual-studio-marketplace/i/OpenProphetDB.openjarvis?style=for-the-badge&logo=visual-studio-code&logoColor=white&label=Install&color=blue)](https://marketplace.visualstudio.com/items?itemName=OpenProphetDB.openjarvis)
+
 ## Features
 
 ### 🤖 Agent Management

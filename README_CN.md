@@ -12,6 +12,15 @@ LLM 的发展让「个人 AI 助理」成为可能。Jarvis 让你在 VSCode 中
 
 **📖 Chinese Documentation | [English Documentation](README.md)**
 
+## VSCode 市场
+
+你可以从 VSCode 市场安装 Jarvis：
+
+[![VSCode Marketplace](https://img.shields.io/visual-studio-marketplace/v/OpenProphetDB.openjarvis?style=for-the-badge&logo=visual-studio-code&logoColor=white&label=VSCode%20Marketplace&color=007ACC)](https://marketplace.visualstudio.com/items?itemName=OpenProphetDB.openjarvis)
+[![Downloads](https://img.shields.io/visual-studio-marketplace/d/OpenProphetDB.openjarvis?style=for-the-badge&logo=visual-studio-code&logoColor=white&label=Downloads&color=green)](https://marketplace.visualstudio.com/items?itemName=OpenProphetDB.openjarvis)
+[![Rating](https://img.shields.io/visual-studio-marketplace/r/OpenProphetDB.openjarvis?style=for-the-badge&logo=visual-studio-code&logoColor=white&label=Rating&color=orange)](https://marketplace.visualstudio.com/items?itemName=OpenProphetDB.openjarvis)
+[![Install](https://img.shields.io/visual-studio-marketplace/i/OpenProphetDB.openjarvis?style=for-the-badge&logo=visual-studio-code&logoColor=white&label=Install&color=blue)](https://marketplace.visualstudio.com/items?itemName=OpenProphetDB.openjarvis)
+
 ## 功能特性
 
 ### 🤖 Agent 管理
