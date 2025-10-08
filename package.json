@@ -2,7 +2,7 @@
   "name": "openjarvis",
   "displayName": "Jarvis - AI Agent Manager",
   "description": "Manage and execute AI-based agents with Claude Code integration",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "publisher": "OpenProphetDB",
   "icon": "resources/jarvis-icon.png",
   "engines": {
@@ -88,9 +88,29 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "jarvis.createAgent",
+        "title": "Jarvis: Add New Agent",
+        "icon": "$(add)"
+      },
+      {
+        "command": "jarvis.deleteAgent",
+        "title": "Jarvis: Delete Agent",
+        "icon": "$(trash)"
+      },
+      {
         "command": "jarvis.refreshTodos",
         "title": "Jarvis: Refresh TODOs",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "jarvis.createTodo",
+        "title": "Jarvis: Add New TODO",
+        "icon": "$(add)"
+      },
+      {
+        "command": "jarvis.deleteTodo",
+        "title": "Jarvis: Delete TODO",
+        "icon": "$(trash)"
       },
       {
         "command": "jarvis.quickAccess",
@@ -178,14 +198,34 @@
       ],
       "view/title": [
         {
+          "command": "jarvis.createAgent",
+          "when": "view == jarvis.agents",
+          "group": "navigation@1"
+        },
+        {
+          "command": "jarvis.deleteAgent",
+          "when": "view == jarvis.agents",
+          "group": "navigation@2"
+        },
+        {
           "command": "jarvis.refreshAgents",
           "when": "view == jarvis.agents",
-          "group": "navigation"
+          "group": "navigation@3"
+        },
+        {
+          "command": "jarvis.createTodo",
+          "when": "view == jarvis.todos",
+          "group": "navigation@1"
+        },
+        {
+          "command": "jarvis.deleteTodo",
+          "when": "view == jarvis.todos",
+          "group": "navigation@2"
         },
         {
           "command": "jarvis.refreshTodos",
           "when": "view == jarvis.todos",
-          "group": "navigation"
+          "group": "navigation@3"
         },
         {
           "command": "jarvis.refreshStatistics",
@@ -243,6 +283,26 @@
           "command": "jarvis.openAgentLog",
           "when": "view == jarvis.agents && viewItem == agent.paused",
           "group": "inline@3"
+        },
+        {
+          "command": "jarvis.deleteAgent",
+          "when": "view == jarvis.agents && viewItem == agent.idle",
+          "group": "inline@9"
+        },
+        {
+          "command": "jarvis.deleteAgent",
+          "when": "view == jarvis.agents && viewItem == agent.running",
+          "group": "inline@9"
+        },
+        {
+          "command": "jarvis.deleteAgent",
+          "when": "view == jarvis.agents && viewItem == agent.error",
+          "group": "inline@9"
+        },
+        {
+          "command": "jarvis.deleteAgent",
+          "when": "view == jarvis.agents && viewItem == agent.paused",
+          "group": "inline@9"
         },
         {
           "command": "jarvis.executeTodo",
@@ -303,6 +363,36 @@
           "command": "jarvis.openTodoLog",
           "when": "view == jarvis.todos && viewItem == todo.paused",
           "group": "inline@3"
+        },
+        {
+          "command": "jarvis.deleteTodo",
+          "when": "view == jarvis.todos && viewItem == todo.pending",
+          "group": "inline@9"
+        },
+        {
+          "command": "jarvis.deleteTodo",
+          "when": "view == jarvis.todos && viewItem == todo.running",
+          "group": "inline@9"
+        },
+        {
+          "command": "jarvis.deleteTodo",
+          "when": "view == jarvis.todos && viewItem == todo.success",
+          "group": "inline@9"
+        },
+        {
+          "command": "jarvis.deleteTodo",
+          "when": "view == jarvis.todos && viewItem == todo.failed",
+          "group": "inline@9"
+        },
+        {
+          "command": "jarvis.deleteTodo",
+          "when": "view == jarvis.todos && viewItem == todo.paused",
+          "group": "inline@9"
+        },
+        {
+          "command": "jarvis.deleteTodo",
+          "when": "view == jarvis.todos && viewItem == todoFile",
+          "group": "navigation"
         }
       ]
     },

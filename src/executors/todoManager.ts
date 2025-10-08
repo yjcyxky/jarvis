@@ -210,6 +210,10 @@ export class TodoManager {
     return allTodos;
   }
 
+  getTodoFiles(): string[] {
+    return Array.from(this.todos.keys());
+  }
+
   getTodosByFile(filePath: string): TodoItem[] {
     return this.todos.get(filePath) || [];
   }
@@ -383,7 +387,9 @@ export class TodoManager {
       prompt += `\n\nAvailable agents:\n${agentList}`;
     }
 
-    prompt += '\n\nPlease complete this task and update any relevant files as needed.';
+    prompt += '\n\nPlease complete this task and update any relevant files as needed. If the task claims a specific agent, you MUST only use the agent and related tools to complete the task.';
+
+    this.logger.info("TodoManager", `Prompt: ${prompt}`);
 
     return prompt;
   }

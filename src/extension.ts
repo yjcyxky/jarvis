@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
 import { AgentManager } from './executors/agentManager';
 import { TodoManager } from './executors/todoManager';
 import { AgentTreeProvider, AgentTreeItem } from './providers/agentTreeProvider';
@@ -9,6 +10,7 @@ import { LogViewer } from './utils/logViewer';
 import { HistoryStore, ExecutionHistoryEntry } from './utils/historyStore';
 import { HistoryViewer } from './utils/historyViewer';
 import { Logger } from './utils/logger';
+import { AgentConfig, TodoItem } from './types';
 
 let agentManager: AgentManager;
 let todoManager: TodoManager;
@@ -105,7 +107,295 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 function registerCommands(context: vscode.ExtensionContext, logViewer: LogViewer) {
+  const applyTemplateReplacements = (
+    content: string,
+    replacements: Record<string, string>
+  ): string => {
+    let updated = content;
+    for (const [key, value] of Object.entries(replacements)) {
+      const regex = new RegExp(`{{\\s*${key}\\s*}}`, 'gi');
+      updated = updated.replace(regex, value);
+    }
+    return updated;
+  };
+
+  const sanitizeBaseName = (raw: string, fallback: string): string => {
+    const replaced = raw
+      .replace(/[\\/:*?"<>|]/g, '-')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+    return replaced || fallback;
+  };
+
+  const getWorkspaceRoot = (): string | undefined =>
+    vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+  const isPathInsideWorkspace = (targetPath: string | undefined): boolean => {
+    const workspaceRoot = getWorkspaceRoot();
+    if (!workspaceRoot || !targetPath) {
+      return false;
+    }
+    const relative = path.relative(workspaceRoot, targetPath);
+    return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+  };
+
+  const formatWorkspaceRelative = (targetPath: string): string => {
+    const workspaceRoot = getWorkspaceRoot();
+    if (!workspaceRoot) {
+      return targetPath;
+    }
+    const relative = path.relative(workspaceRoot, targetPath);
+    if (!relative || relative.startsWith('..')) {
+      return targetPath;
+    }
+    return relative;
+  };
+
+  const createEntityFromTemplate = async (type: 'agent' | 'todo'): Promise<void> => {
+    const logger = Logger.getInstance();
+    const workspaceRoot = getWorkspaceRoot();
+
+    if (!workspaceRoot) {
+      vscode.window.showErrorMessage('Jarvis requires a workspace to create files.');
+      return;
+    }
+
+    const prompt =
+      type === 'agent'
+        ? 'Enter a name for the new agent file'
+        : 'Enter a name for the new TODO file';
+    const placeHolder = type === 'agent' ? 'weekly-agent' : 'sprint-todos';
+
+    const input = await vscode.window.showInputBox({
+      prompt,
+      placeHolder,
+      validateInput: value => {
+        if (!value.trim()) {
+          return 'Name cannot be empty';
+        }
+        if (value.includes('/') || value.includes('\\')) {
+          return 'Name cannot contain path separators';
+        }
+        return undefined;
+      }
+    });
+
+    if (!input) {
+      return;
+    }
+
+    const trimmed = input.trim();
+    const extension = path.extname(trimmed) || '.md';
+    const base = extension ? path.basename(trimmed, extension) : trimmed;
+    const sanitizedBase = sanitizeBaseName(
+      base,
+      type === 'agent' ? 'new-agent' : 'new-todo'
+    );
+    const fileName = `${sanitizedBase}${extension}`;
+
+    const pathsConfig = vscode.workspace.getConfiguration('jarvis.paths');
+    const relativeDir = pathsConfig.get<string>(
+      type === 'agent' ? 'agentDir' : 'todoDir',
+      type === 'agent' ? '.jarvis/agents' : '.jarvis/todos'
+    );
+    const targetDir = path.join(workspaceRoot, relativeDir);
+
+    try {
+      await fs.promises.mkdir(targetDir, { recursive: true });
+    } catch (error) {
+      logger.error('Command', `Failed to prepare directory for ${type} file`, error);
+      vscode.window.showErrorMessage(`Failed to prepare directory: ${error}`);
+      return;
+    }
+
+    const filePath = path.join(targetDir, fileName);
+    if (fs.existsSync(filePath)) {
+      vscode.window.showErrorMessage(`File ${fileName} already exists.`);
+      return;
+    }
+
+    const templateSegments =
+      type === 'agent'
+        ? ['resources', 'agent-template.md']
+        : ['resources', 'todo-template.md'];
+
+    let templateContent = '';
+    try {
+      const templateUri = vscode.Uri.joinPath(context.extensionUri, ...templateSegments);
+      const data = await vscode.workspace.fs.readFile(templateUri);
+      templateContent = Buffer.from(data).toString('utf8');
+    } catch (error) {
+      logger.warn('Command', `Unable to load ${type} template: ${error}`);
+    }
+
+    templateContent = applyTemplateReplacements(templateContent, {
+      name: sanitizedBase,
+      title: sanitizedBase,
+      filename: fileName
+    });
+
+    if (!templateContent.trim()) {
+      templateContent =
+        type === 'agent'
+          ? `---\nname: ${sanitizedBase}\ndescription: \nmodel: \n---\n\n# Instructions\n- Describe the agent goals here.\n`
+          : `# ${sanitizedBase}\n\n- [ ] First task description\n`;
+    }
+
+    try {
+      await fs.promises.writeFile(filePath, templateContent, 'utf8');
+    } catch (error) {
+      logger.error('Command', `Failed to write ${type} template`, error);
+      vscode.window.showErrorMessage(`Failed to create file: ${error}`);
+      return;
+    }
+
+    try {
+      const fileUri = vscode.Uri.file(filePath);
+      const document = await vscode.workspace.openTextDocument(fileUri);
+      await vscode.window.showTextDocument(document, { preview: false });
+    } catch (error) {
+      logger.error('Command', `Failed to open new ${type} file`, error);
+      vscode.window.showWarningMessage(
+        `Created ${fileName}, but failed to open it automatically: ${error}`
+      );
+    }
+
+    if (type === 'agent') {
+      agentManager.refresh();
+      agentTreeProvider.refresh();
+    } else {
+      todoManager.refresh();
+      todoTreeProvider.refresh();
+    }
+    statisticsProvider.refresh(true);
+
+    vscode.window.showInformationMessage(
+      type === 'agent'
+        ? `New agent file ${fileName} created.`
+        : `New TODO file ${fileName} created.`
+    );
+  };
+
   // Agent commands
+  context.subscriptions.push(
+    vscode.commands.registerCommand('jarvis.createAgent', async () => {
+      await createEntityFromTemplate('agent');
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('jarvis.deleteAgent', async (target?: AgentTreeItem | string) => {
+      const logger = Logger.getInstance();
+      const workspaceRoot = getWorkspaceRoot();
+
+      if (!workspaceRoot) {
+        vscode.window.showErrorMessage('Jarvis requires a workspace to delete agent prompts.');
+        return;
+      }
+
+      let agentName: string | undefined;
+
+      if (typeof target === 'string') {
+        agentName = target;
+      } else if (target instanceof AgentTreeItem) {
+        agentName = target.agent.name;
+      }
+
+      const agents = agentManager.getAgents();
+
+      const pickAgent = async (): Promise<AgentConfig | undefined> => {
+        const deletableAgents = agents.filter(agent => isPathInsideWorkspace(agent.sourcePath));
+        if (deletableAgents.length === 0) {
+          vscode.window.showWarningMessage('No agent prompts in the workspace can be deleted.');
+          return undefined;
+        }
+
+        const picked = await vscode.window.showQuickPick(
+          deletableAgents.map(agent => ({
+            label: agent.name,
+            description: agent.description || undefined,
+            detail: formatWorkspaceRelative(agent.sourcePath),
+            agent
+          })),
+          { placeHolder: 'Select an agent prompt to delete' }
+        );
+
+        return picked?.agent;
+      };
+
+      let agentConfig: AgentConfig | undefined = agentName
+        ? agents.find(a => a.name === agentName)
+        : undefined;
+
+      if (!agentConfig && agentName) {
+        vscode.window.showWarningMessage(`Agent "${agentName}" was not found.`);
+      }
+
+      if (!agentConfig) {
+        agentConfig = await pickAgent();
+        if (!agentConfig) {
+          return;
+        }
+        agentName = agentConfig.name;
+      }
+
+      if (!agentName) {
+        return;
+      }
+
+      const sourcePath = agentManager.getAgentSource(agentName);
+      if (!sourcePath) {
+        vscode.window.showWarningMessage('Could not determine the prompt file for this agent.');
+        return;
+      }
+
+      if (!isPathInsideWorkspace(sourcePath)) {
+        vscode.window.showWarningMessage('This agent prompt is read-only and cannot be deleted.');
+        return;
+      }
+
+      const status = agentManager.getStatus(agentName);
+      if (status?.state === 'running') {
+        vscode.window.showWarningMessage(`Stop agent "${agentName}" before deleting its prompt.`);
+        return;
+      }
+
+      if (!fs.existsSync(sourcePath)) {
+        vscode.window.showWarningMessage(`File already missing: ${formatWorkspaceRelative(sourcePath)}`);
+        agentManager.refresh();
+        agentTreeProvider.refresh();
+        return;
+      }
+
+      const confirmation = await vscode.window.showWarningMessage(
+        `Delete agent "${agentName}"?\n${formatWorkspaceRelative(sourcePath)}`,
+        { modal: true },
+        'Delete'
+      );
+      if (confirmation !== 'Delete') {
+        return;
+      }
+
+      try {
+        await fs.promises.unlink(sourcePath);
+        logger.info('Command', `Deleted agent file ${sourcePath}`);
+      } catch (error) {
+        logger.error('Command', `Failed to delete agent file ${sourcePath}`, error);
+        vscode.window.showErrorMessage(`Failed to delete agent: ${error}`);
+        return;
+      }
+
+      agentManager.refresh();
+      agentTreeProvider.refresh();
+      statisticsProvider.refresh(true);
+
+      vscode.window.showInformationMessage(
+        `Agent "${agentName}" deleted (${formatWorkspaceRelative(sourcePath)}).`
+      );
+    })
+  );
+
   context.subscriptions.push(
     vscode.commands.registerCommand('jarvis.startAgent', async (item: AgentTreeItem) => {
       if (item?.agent) {
@@ -200,6 +490,117 @@ function registerCommands(context: vscode.ExtensionContext, logViewer: LogViewer
   );
 
   // TODO commands
+  context.subscriptions.push(
+    vscode.commands.registerCommand('jarvis.createTodo', async () => {
+      await createEntityFromTemplate('todo');
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('jarvis.deleteTodo', async (target?: TodoTreeItem | { todos?: TodoItem[] } | string) => {
+      const logger = Logger.getInstance();
+      const workspaceRoot = getWorkspaceRoot();
+
+      if (!workspaceRoot) {
+        vscode.window.showErrorMessage('Jarvis requires a workspace to delete TODO files.');
+        return;
+      }
+
+      const resolveFilePathFromTarget = (
+        candidate: TodoTreeItem | { todos?: TodoItem[] } | string | undefined
+      ): string | undefined => {
+        if (!candidate) {
+          return undefined;
+        }
+        if (typeof candidate === 'string') {
+          return path.isAbsolute(candidate) ? candidate : path.join(workspaceRoot, candidate);
+        }
+        if (candidate instanceof TodoTreeItem) {
+          return candidate.todo.file;
+        }
+        if (Array.isArray(candidate.todos) && candidate.todos.length > 0) {
+          return candidate.todos[0].file;
+        }
+        return undefined;
+      };
+
+      let filePath = resolveFilePathFromTarget(target);
+
+      const pickTodoFile = async (): Promise<string | undefined> => {
+        const files = todoManager.getTodoFiles().filter(isPathInsideWorkspace);
+        if (files.length === 0) {
+          vscode.window.showWarningMessage('No TODO files found in the workspace to delete.');
+          return undefined;
+        }
+
+        const picked = await vscode.window.showQuickPick(
+          files.map(file => ({
+            label: path.basename(file),
+            description: formatWorkspaceRelative(file),
+            file
+          })),
+          { placeHolder: 'Select a TODO file to delete' }
+        );
+
+        return picked?.file;
+      };
+
+      if (!filePath) {
+        filePath = await pickTodoFile();
+        if (!filePath) {
+          return;
+        }
+      }
+
+      if (!isPathInsideWorkspace(filePath)) {
+        vscode.window.showWarningMessage('This TODO file is read-only and cannot be deleted.');
+        return;
+      }
+
+      const todosInFile = todoManager.getTodosByFile(filePath);
+      const runningTodo = todosInFile.find(todo => todo.executionStatus === 'running');
+      if (runningTodo) {
+        vscode.window.showWarningMessage(
+          `Stop running TODO "${runningTodo.text}" before deleting its file.`
+        );
+        return;
+      }
+
+      if (!fs.existsSync(filePath)) {
+        vscode.window.showWarningMessage(`TODO file already missing: ${formatWorkspaceRelative(filePath)}`);
+        todoManager.refresh();
+        todoTreeProvider.refresh();
+        return;
+      }
+
+      const confirmation = await vscode.window.showWarningMessage(
+        `Delete TODO file?\n${formatWorkspaceRelative(filePath)}`,
+        { modal: true },
+        'Delete'
+      );
+      if (confirmation !== 'Delete') {
+        return;
+      }
+
+      try {
+        await fs.promises.unlink(filePath);
+        logger.info('Command', `Deleted TODO file ${filePath}`);
+      } catch (error) {
+        logger.error('Command', `Failed to delete TODO file ${filePath}`, error);
+        vscode.window.showErrorMessage(`Failed to delete TODO file: ${error}`);
+        return;
+      }
+
+      todoManager.refresh();
+      todoTreeProvider.refresh();
+      statisticsProvider.refresh(true);
+
+      vscode.window.showInformationMessage(
+        `TODO file deleted (${formatWorkspaceRelative(filePath)}).`
+      );
+    })
+  );
+
   context.subscriptions.push(
     vscode.commands.registerCommand('jarvis.executeTodo', async (item: TodoTreeItem) => {
       if (item?.todo) {
